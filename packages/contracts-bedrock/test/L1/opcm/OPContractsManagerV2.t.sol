@@ -1,0 +1,4173 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.15;
+
+// Testing
+import { VmSafe } from "forge-std/Vm.sol";
+import { stdStorage, StdStorage } from "forge-std/StdStorage.sol";
+import { CommonTest } from "test/setup/CommonTest.sol";
+import { DisputeGames } from "test/setup/DisputeGames.sol";
+import { PastUpgrades } from "test/setup/PastUpgrades.sol";
+import { BatchUpgrader } from "test/L1/opcm/helpers/BatchUpgrader.sol";
+
+// Libraries
+import { Config } from "scripts/libraries/Config.sol";
+import { ForgeArtifacts, StorageSlot } from "scripts/libraries/ForgeArtifacts.sol";
+import { EIP1967Helper } from "test/mocks/EIP1967Helper.sol";
+import { Claim, Duration, Hash } from "src/dispute/lib/LibUDT.sol";
+import { GameType, GameTypes, Proposal } from "src/dispute/lib/Types.sol";
+import { LibGameArgs } from "src/dispute/lib/LibGameArgs.sol";
+import { SemverComp } from "src/libraries/SemverComp.sol";
+import { Constants } from "src/libraries/Constants.sol";
+import { DevFeatures } from "src/libraries/DevFeatures.sol";
+import { Features } from "src/libraries/Features.sol";
+
+// Interfaces
+import { IResourceMetering } from "interfaces/L1/IResourceMetering.sol";
+import { IProxyAdmin } from "interfaces/universal/IProxyAdmin.sol";
+import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
+import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
+import { ISemver } from "interfaces/universal/ISemver.sol";
+import { IOPContractsManagerStandardValidator } from "interfaces/L1/IOPContractsManagerStandardValidator.sol";
+import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
+import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
+import { IOPContractsManagerContainer } from "interfaces/L1/opcm/IOPContractsManagerContainer.sol";
+import { IOPContractsManagerMigrator } from "interfaces/L1/opcm/IOPContractsManagerMigrator.sol";
+import { IOptimismPortal2 } from "interfaces/L1/IOptimismPortal2.sol";
+import { IDisputeGame } from "interfaces/dispute/IDisputeGame.sol";
+import { IDisputeGameFactory } from "interfaces/dispute/IDisputeGameFactory.sol";
+import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
+import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
+import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
+
+/// @title OPContractsManagerV2_TestInit
+/// @notice Base test initialization contract for OPContractsManagerV2.
+contract OPContractsManagerV2_TestInit is CommonTest {
+    /// @notice Fake prestate for Cannon games.
+    Claim cannonPrestate = Claim.wrap(bytes32(keccak256("cannonPrestate")));
+
+    /// @notice Fake prestate for Cannon Kona games.
+    Claim cannonKonaPrestate = Claim.wrap(bytes32(keccak256("cannonKonaPrestate")));
+
+    /// @notice Special string constant used to indicate that we expect a revert without any data.
+    bytes public constant EXPECT_REVERT_WITHOUT_DATA = bytes("EXPECT_REVERT_WITHOUT_DATA");
+
+    /// @notice Buffer percentage (relative to EIP-7825 gas limit) allowed for deployments.
+    uint256 public constant DEPLOY_GAS_BUFFER_PERCENTAGE = 80; // 80%
+
+    /// @notice Sets up the test suite.
+    function setUp() public virtual override {
+        super.setUp();
+    }
+
+    /// @notice Helper function that runs an OPCM V2 deploy, asserts that the deploy was successful,
+    ///         and runs post-deploy standard validator checks.
+    /// @param _opcm The OPCM contract to use for deployment.
+    /// @param _deployConfig The full config for the deployment.
+    /// @param _revertBytes The bytes of the revert to expect (empty if no revert expected).
+    /// @param _expectedValidatorErrors The StandardValidator errors to expect.
+    /// @return cts_ The deployed chain contracts.
+    function _runOpcmV2DeployAndChecks(
+        IOPContractsManagerV2 _opcm,
+        IOPContractsManagerV2.FullConfig memory _deployConfig,
+        bytes memory _revertBytes,
+        string memory _expectedValidatorErrors
+    )
+        internal
+        returns (IOPContractsManagerV2.ChainContracts memory cts_)
+    {
+        // Grab the proposer and challenger from deploy config for validator.
+        address deployProposer;
+        address deployChallenger;
+        for (uint256 i = 0; i < _deployConfig.disputeGameConfigs.length; i++) {
+            if (
+                _deployConfig.disputeGameConfigs[i].enabled
+                    && _deployConfig.disputeGameConfigs[i].gameType.raw() == GameTypes.PERMISSIONED_CANNON.raw()
+            ) {
+                IOPContractsManagerUtils.PermissionedDisputeGameConfig memory parsedArgs = abi.decode(
+                    _deployConfig.disputeGameConfigs[i].gameArgs,
+                    (IOPContractsManagerUtils.PermissionedDisputeGameConfig)
+                );
+                deployProposer = parsedArgs.proposer;
+                deployChallenger = parsedArgs.challenger;
+                break;
+            } else if (
+                _deployConfig.disputeGameConfigs[i].enabled
+                    && _deployConfig.disputeGameConfigs[i].gameType.raw() == GameTypes.SUPER_PERMISSIONED.raw()
+            ) {
+                IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig memory parsedArgs = abi.decode(
+                    _deployConfig.disputeGameConfigs[i].gameArgs,
+                    (IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig)
+                );
+                deployProposer = parsedArgs.proposer;
+                break;
+            }
+        }
+
+        // Expect the revert if one is specified.
+        if (_revertBytes.length > 0) {
+            if (keccak256(_revertBytes) == keccak256(EXPECT_REVERT_WITHOUT_DATA)) {
+                // nosemgrep: sol-safety-expectrevert-no-args
+                vm.expectRevert();
+            } else {
+                vm.expectRevert(_revertBytes);
+            }
+        }
+
+        // Execute the V2 deploy.
+        cts_ = _opcm.deploy(_deployConfig);
+
+        // Return early if a revert was expected. Otherwise we'll get errors below.
+        if (_revertBytes.length > 0) {
+            return cts_;
+        }
+
+        // Less than the buffer percentage of the EIP-7825 gas limit to account for the gas used
+        // by using Safe.
+        uint256 fusakaLimit = 2 ** 24;
+        VmSafe.Gas memory gas = vm.lastFrameGas();
+        assertLt(
+            gas.gasTotalUsed,
+            fusakaLimit * DEPLOY_GAS_BUFFER_PERCENTAGE / 100,
+            string.concat(
+                "Deploy exceeds gas target of ", vm.toString(DEPLOY_GAS_BUFFER_PERCENTAGE), "% of 2**24 (EIP-7825)"
+            )
+        );
+
+        // Coverage changes bytecode, so we get various errors. We can safely ignore the result of
+        // the standard validator in the coverage case.
+        if (vm.isContext(VmSafe.ForgeContext.Coverage)) {
+            return cts_;
+        }
+
+        // Create validationOverrides for the newly deployed chain.
+        IOPContractsManagerStandardValidator.ValidationOverrides memory validationOverrides =
+            IOPContractsManagerStandardValidator.ValidationOverrides({
+                l1PAOMultisig: _deployConfig.proxyAdminOwner, challenger: deployChallenger
+            });
+
+        // Grab the validator before we do the error assertion.
+        IOPContractsManagerStandardValidator validator = _opcm.opcmStandardValidator();
+
+        // Expect validator errors if the user provides them.
+        if (bytes(_expectedValidatorErrors).length > 0) {
+            string memory expectedOverrideErrors = deployChallenger == address(0)
+                ? "OPContractsManagerStandardValidator: OVERRIDES-L1PAOMULTISIG,"
+                : "OPContractsManagerStandardValidator: OVERRIDES-L1PAOMULTISIG,OVERRIDES-CHALLENGER,";
+            vm.expectRevert(bytes(string.concat(expectedOverrideErrors, _expectedValidatorErrors)));
+        }
+
+        // Run the StandardValidator checks on the newly deployed chain.
+        validator.validateWithOverrides(
+            IOPContractsManagerStandardValidator.ValidationInputDev({
+                sysCfg: cts_.systemConfig,
+                cannonPrestate: cannonPrestate.raw(),
+                cannonKonaPrestate: cannonKonaPrestate.raw(),
+                l2ChainID: _deployConfig.l2ChainId,
+                proposer: deployProposer
+            }),
+            false,
+            validationOverrides
+        );
+
+        return cts_;
+    }
+
+    /// @notice Executes a V2 deploy and checks the results.
+    /// @param _deployConfig The full config for the deployment.
+    /// @return The deployed chain contracts.
+    function runDeployV2(IOPContractsManagerV2.FullConfig memory _deployConfig)
+        public
+        returns (IOPContractsManagerV2.ChainContracts memory)
+    {
+        return _runOpcmV2DeployAndChecks(opcmV2, _deployConfig, bytes(""), "");
+    }
+
+    /// @notice Executes a V2 deploy and expects reverts.
+    /// @param _deployConfig The full config for the deployment.
+    /// @param _revertBytes The bytes of the revert to expect.
+    /// @return The deployed chain contracts.
+    function runDeployV2(
+        IOPContractsManagerV2.FullConfig memory _deployConfig,
+        bytes memory _revertBytes
+    )
+        public
+        returns (IOPContractsManagerV2.ChainContracts memory)
+    {
+        return _runOpcmV2DeployAndChecks(opcmV2, _deployConfig, _revertBytes, "");
+    }
+
+    /// @notice Executes a V2 deploy and expects reverts with validator errors.
+    /// @param _deployConfig The full config for the deployment.
+    /// @param _revertBytes The bytes of the revert to expect.
+    /// @param _expectedValidatorErrors The StandardValidator errors to expect.
+    /// @return The deployed chain contracts.
+    function runDeployV2(
+        IOPContractsManagerV2.FullConfig memory _deployConfig,
+        bytes memory _revertBytes,
+        string memory _expectedValidatorErrors
+    )
+        public
+        returns (IOPContractsManagerV2.ChainContracts memory)
+    {
+        return _runOpcmV2DeployAndChecks(opcmV2, _deployConfig, _revertBytes, _expectedValidatorErrors);
+    }
+}
+
+/// @title OPContractsManagerV2_Upgrade_TestInit
+/// @notice Test initialization contract for OPContractsManagerV2 upgrade functions.
+contract OPContractsManagerV2_Upgrade_TestInit is OPContractsManagerV2_TestInit {
+    // The Upgraded event emitted by the Proxy contract.
+    event Upgraded(address indexed implementation);
+
+    /// @notice Chain ID for the L2 chain being upgraded in this test.
+    uint256 l2ChainId;
+
+    /// @notice Address of the ProxyAdmin owner for the chain being upgraded.
+    address chainPAO;
+
+    /// @notice Address of the Superchain ProxyAdmin owner.
+    address superchainPAO;
+
+    /// @notice Name of the chain being forked.
+    string public opChain = Config.forkOpChain();
+
+    /// @notice Default v2 upgrade input.
+    IOPContractsManagerV2.UpgradeInput v2UpgradeInput;
+
+    /// @notice Buffer percentage (relative to EIP-7825 gas limit) allowed for upgrades.
+    uint256 public constant UPGRADE_GAS_BUFFER_PERCENTAGE = 50; // 50%
+
+    /// @notice Sets up the test suite.
+    function setUp() public virtual override {
+        super.disableUpgradedFork();
+        super.setUp();
+
+        skipIfNotForkTest("OPContractsManagerV2_Upgrade_TestInit: only runs in forked tests");
+        skipIfOpsRepoTest("OPContractsManagerV2_Upgrade_TestInit: skipped in superchain-ops");
+
+        // Set the chain PAO.
+        chainPAO = proxyAdmin.owner();
+        vm.label(chainPAO, "ProxyAdmin Owner");
+
+        // Set the SuperchainConfig PAO.
+        superchainPAO = IProxyAdmin(EIP1967Helper.getAdmin(address(superchainConfig))).owner();
+        vm.label(superchainPAO, "SuperchainConfig ProxyAdmin Owner");
+
+        // Grab and set the L2 chain ID.
+        l2ChainId = uint256(uint160(address(artifacts.mustGetAddress("L2ChainId"))));
+
+        // Set up the default v2 upgrade input dispute game configs.
+        address initialProposerForV2 = DisputeGames.permissionedGameProposer(disputeGameFactory);
+        v2UpgradeInput.systemConfig = systemConfig;
+        if (SemverComp.parse(opcmV2.version()).major == 9) {
+            v2UpgradeInput.extraInstructions
+                .push(
+                    IOPContractsManagerUtils.ExtraInstruction({
+                        key: Constants.PERMITTED_PROXY_DEPLOYMENT_KEY, data: bytes("ETHLockbox")
+                    })
+                );
+        }
+        v2UpgradeInput.disputeGameConfigs
+            .push(
+                IOPContractsManagerUtils.DisputeGameConfig({
+                    enabled: false, initBond: 0, gameType: GameTypes.CANNON, gameArgs: bytes("")
+                })
+            );
+        v2UpgradeInput.disputeGameConfigs
+            .push(
+                IOPContractsManagerUtils.DisputeGameConfig({
+                    enabled: false, initBond: 0, gameType: GameTypes.PERMISSIONED_CANNON, gameArgs: bytes("")
+                })
+            );
+        v2UpgradeInput.disputeGameConfigs
+            .push(
+                IOPContractsManagerUtils.DisputeGameConfig({
+                    enabled: false, initBond: 0, gameType: GameTypes.CANNON_KONA, gameArgs: bytes("")
+                })
+            );
+        v2UpgradeInput.disputeGameConfigs
+            .push(
+                IOPContractsManagerUtils.DisputeGameConfig({
+                    enabled: true,
+                    initBond: 0,
+                    gameType: GameTypes.SUPER_PERMISSIONED,
+                    gameArgs: abi.encode(
+                        IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig({ proposer: initialProposerForV2 })
+                    )
+                })
+            );
+        v2UpgradeInput.disputeGameConfigs
+            .push(
+                IOPContractsManagerUtils.DisputeGameConfig({
+                    enabled: true,
+                    initBond: DisputeGames.permissionlessGameInitBondForUpgrade(
+                        disputeGameFactory, GameTypes.SUPER_CANNON_KONA, DEFAULT_DISPUTE_GAME_INIT_BOND
+                    ),
+                    gameType: GameTypes.SUPER_CANNON_KONA,
+                    gameArgs: abi.encode(
+                        IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: cannonKonaPrestate })
+                    )
+                })
+            );
+        v2UpgradeInput.disputeGameConfigs
+            .push(
+                IOPContractsManagerUtils.DisputeGameConfig({
+                    enabled: false,
+                    initBond: 0,
+                    gameType: GameTypes.ZK_DISPUTE_GAME,
+                    gameArgs: abi.encode(
+                        IOPContractsManagerUtils.ZKDisputeGameConfig({
+                            absolutePrestate: Claim.wrap(bytes32(0)),
+                            maxChallengeDuration: Duration.wrap(0),
+                            maxProveDuration: Duration.wrap(0),
+                            challengerBond: 0
+                        })
+                    )
+                })
+            );
+    }
+
+    /// @notice Helper function that runs an OPCM V2 upgrade, asserts that the upgrade was successful,
+    ///         and runs post-upgrade smoke tests.
+    /// @param _opcm The OPCM contract to reference for shared components.
+    /// @param _delegateCaller The address of the delegate caller to use for superchain upgrade.
+    /// @param _revertBytes The bytes of the revert to expect.
+    /// @param _expectedValidatorErrors The StandardValidator errors to expect.
+    function _runOpcmV2UpgradeAndChecks(
+        IOPContractsManagerV2 _opcm,
+        address _delegateCaller,
+        bytes memory _revertBytes,
+        string memory _expectedValidatorErrors
+    )
+        internal
+    {
+        address initialChallenger = DisputeGames.permissionedGameChallenger(disputeGameFactory);
+        address initialProposer = DisputeGames.permissionedGameProposer(disputeGameFactory);
+
+        // Execute the SuperchainConfig upgrade.
+        prankDelegateCall(superchainPAO);
+        (bool success, bytes memory reason) = address(opcmV2)
+            .delegatecall(
+                abi.encodeCall(
+                    IOPContractsManagerV2.upgradeSuperchain,
+                    (IOPContractsManagerV2.SuperchainUpgradeInput({
+                            superchainConfig: superchainConfig,
+                            extraInstructions: new IOPContractsManagerUtils.ExtraInstruction[](0)
+                        }))
+                )
+            );
+        if (success == false) {
+            // Only acceptable revert reason is the SuperchainConfig already being up to date. This
+            // try/catch is better than checking the version via the implementations struct because
+            // the implementations struct interface can change between OPCM versions which would
+            // cause the test to break and be a pain to resolve.
+            assertTrue(
+                bytes4(reason) == IOPContractsManagerUtils.OPContractsManagerUtils_DowngradeNotAllowed.selector,
+                "Revert reason other than DowngradeNotAllowed"
+            );
+        }
+
+        // Expect the revert if one is specified.
+        if (_revertBytes.length > 0) {
+            if (keccak256(_revertBytes) == keccak256(EXPECT_REVERT_WITHOUT_DATA)) {
+                // nosemgrep: sol-safety-expectrevert-no-args
+                vm.expectRevert();
+            } else {
+                vm.expectRevert(_revertBytes);
+            }
+        }
+
+        // Execute the V2 chain upgrade via delegate caller.
+        prankDelegateCall(_delegateCaller);
+        (bool upgradeSuccess,) =
+            address(opcmV2).delegatecall(abi.encodeCall(IOPContractsManagerV2.upgrade, (v2UpgradeInput)));
+        assertTrue(upgradeSuccess, "upgrade failed");
+
+        // Return early if a revert was expected. Otherwise we'll get errors below.
+        if (_revertBytes.length > 0) {
+            return;
+        }
+
+        // Less than the buffer percentage of the EIP-7825 gas limit to account for the gas used
+        // by using Safe.
+        uint256 fusakaLimit = 2 ** 24;
+        VmSafe.Gas memory gas = vm.lastFrameGas();
+        assertLt(
+            gas.gasTotalUsed,
+            fusakaLimit * UPGRADE_GAS_BUFFER_PERCENTAGE / 100,
+            string.concat(
+                "Upgrade exceeds gas target of ", vm.toString(UPGRADE_GAS_BUFFER_PERCENTAGE), "% of 2**24 (EIP-7825)"
+            )
+        );
+
+        // Coverage changes bytecode, so we get various errors. We can safely ignore the result of
+        // the standard validator in the coverage case, if the validator is failing in coverage
+        // then it will also fail in other CI tests (unless it's the expected issues, in which case
+        // we can safely skip).
+        if (vm.isContext(VmSafe.ForgeContext.Coverage)) {
+            return;
+        }
+
+        // Create validationOverrides
+        IOPContractsManagerStandardValidator.ValidationOverrides memory validationOverrides =
+            IOPContractsManagerStandardValidator.ValidationOverrides({
+                l1PAOMultisig: v2UpgradeInput.systemConfig.proxyAdminOwner(), challenger: initialChallenger
+            });
+
+        // Grab the validator before we do the error assertion because otherwise the assertion will
+        // try to apply to this function call instead.
+        IOPContractsManagerStandardValidator validator = _opcm.opcmStandardValidator();
+
+        // Expect validator errors if the user provides them. We always expect the L1PAOMultisig
+        // and Challenger overrides so we don't need to repeat them here.
+        if (bytes(_expectedValidatorErrors).length > 0) {
+            string memory expectedOverrideErrors = initialChallenger == address(0)
+                ? "OPContractsManagerStandardValidator: OVERRIDES-L1PAOMULTISIG,"
+                : "OPContractsManagerStandardValidator: OVERRIDES-L1PAOMULTISIG,OVERRIDES-CHALLENGER,";
+            vm.expectRevert(bytes(string.concat(expectedOverrideErrors, _expectedValidatorErrors)));
+        }
+
+        // Run the StandardValidator checks.
+        validator.validateWithOverrides(
+            IOPContractsManagerStandardValidator.ValidationInputDev({
+                sysCfg: v2UpgradeInput.systemConfig,
+                cannonPrestate: cannonPrestate.raw(),
+                cannonKonaPrestate: cannonKonaPrestate.raw(),
+                l2ChainID: l2ChainId,
+                proposer: initialProposer
+            }),
+            false,
+            validationOverrides
+        );
+    }
+
+    /// @notice Executes all past upgrades that have not yet been executed on mainnet as of the
+    ///         current simulation block defined in the justfile for this package. This function
+    ///         might be empty if there are no previous upgrades to execute. You should remove
+    ///         upgrades from this function once they've been executed on mainnet and the
+    ///         simulation block has been bumped beyond the execution block.
+    /// @param _delegateCaller The address of the delegate caller to use for the upgrade.
+    function runPastUpgrades(address _delegateCaller) internal {
+        PastUpgrades.runPastUpgrades(_delegateCaller, v2UpgradeInput.systemConfig, superchainConfig, disputeGameFactory);
+    }
+
+    /// @notice Executes the current V2 upgrade and checks the results.
+    /// @param _delegateCaller The address of the delegate caller to use for the superchain upgrade.
+    function runCurrentUpgradeV2(address _delegateCaller) public {
+        _runOpcmV2UpgradeAndChecks(opcmV2, _delegateCaller, bytes(""), "");
+    }
+
+    /// @notice Executes the current V2 upgrade and expects reverts.
+    /// @param _delegateCaller The address of the delegate caller to use for the superchain upgrade.
+    /// @param _revertBytes The bytes of the revert to expect.
+    function runCurrentUpgradeV2(address _delegateCaller, bytes memory _revertBytes) public {
+        _runOpcmV2UpgradeAndChecks(opcmV2, _delegateCaller, _revertBytes, "");
+    }
+
+    /// @notice Executes the current V2 upgrade and expects reverts.
+    /// @param _delegateCaller The address of the delegate caller to use for the superchain upgrade.
+    /// @param _revertBytes The bytes of the revert to expect.
+    /// @param _expectedValidatorErrors The StandardValidator errors to expect.
+    function runCurrentUpgradeV2(
+        address _delegateCaller,
+        bytes memory _revertBytes,
+        string memory _expectedValidatorErrors
+    )
+        public
+    {
+        _runOpcmV2UpgradeAndChecks(opcmV2, _delegateCaller, _revertBytes, _expectedValidatorErrors);
+    }
+
+    /// @notice Reloads fork-live contract handles after rerunning ForkL1Live, which may overwrite artifacts.
+    function _reloadForkLiveContracts() internal {
+        systemConfig = ISystemConfig(artifacts.mustGetAddress("SystemConfigProxy"));
+        optimismPortal2 = IOptimismPortal2(payable(artifacts.mustGetAddress("OptimismPortalProxy")));
+        ethLockbox = IETHLockbox(artifacts.getAddress("ETHLockboxProxy"));
+        superchainConfig = ISuperchainConfig(artifacts.mustGetAddress("SuperchainConfigProxy"));
+        disputeGameFactory = IDisputeGameFactory(artifacts.mustGetAddress("DisputeGameFactoryProxy"));
+        anchorStateRegistry = IAnchorStateRegistry(artifacts.mustGetAddress("AnchorStateRegistryProxy"));
+        delayedWeth = IDelayedWETH(artifacts.mustGetAddress("DelayedWETHProxy"));
+        opcmV2 = IOPContractsManagerV2(artifacts.mustGetAddress("OPContractsManagerV2"));
+        proxyAdmin = IProxyAdmin(artifacts.mustGetAddress("ProxyAdmin"));
+        proxyAdminOwner = proxyAdmin.owner();
+        superchainProxyAdmin = IProxyAdmin(EIP1967Helper.getAdmin(address(superchainConfig)));
+        superchainProxyAdminOwner = superchainProxyAdmin.owner();
+        setSystemConfig(systemConfig);
+    }
+
+    /// @notice Extracts the absolute prestate embedded in a dispute game config.
+    /// @param _gameType Game type to inspect.
+    /// @return prestate_ The absolute prestate stored in the factory's game args.
+    function _gameArgsAbsolutePrestate(GameType _gameType) internal view returns (bytes32 prestate_) {
+        bytes memory args = disputeGameFactory.gameArgs(_gameType);
+        if (args.length == 0) {
+            return bytes32(0);
+        }
+        assembly {
+            prestate_ := mload(add(args, 0x20))
+        }
+    }
+}
+
+/// @title OPContractsManagerV2_Upgrade_Test
+/// @notice Tests OPContractsManagerV2.upgrade
+contract OPContractsManagerV2_Upgrade_Test is OPContractsManagerV2_Upgrade_TestInit {
+    /// @notice Sets up the test.
+    function setUp() public override {
+        super.setUp();
+
+        // Run all past upgrades.
+        runPastUpgrades(chainPAO);
+
+        anchorStateRegistry = optimismPortal2.anchorStateRegistry();
+    }
+
+    /// @notice Tests that the upgrade function succeeds when executed normally.
+    function test_upgrade_succeeds() public {
+        // Run the upgrade test and checks
+        runCurrentUpgradeV2(chainPAO);
+    }
+
+    /// @notice Tests that calling upgrade twice does not revert, ensuring the upgrade function
+    ///         has no one-time-only state transitions that would block a subsequent upgrade call.
+    function test_upgrade_calledTwice_succeeds() public {
+        runCurrentUpgradeV2(chainPAO);
+        runCurrentUpgradeV2(chainPAO);
+    }
+
+    /// @notice Tests lockbox state and balances after upgrading the forked chain.
+    ///         CI currently runs this test for OP, Ink, and Unichain, which already have a lockbox enabled.
+    function test_upgrade_lockbox_succeeds() public {
+        bool interopEnabledBefore = systemConfig.isFeatureEnabled(Features.INTEROP);
+        bool lockboxEnabledBefore = systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX);
+        uint256 portalBalanceBefore = 1 ether;
+        vm.deal(address(optimismPortal2), portalBalanceBefore);
+
+        IETHLockbox lockboxBefore = optimismPortal2.ethLockbox();
+        uint256 lockboxBalanceBefore = address(lockboxBefore).balance;
+
+        runCurrentUpgradeV2(chainPAO);
+
+        assertEq(systemConfig.isFeatureEnabled(Features.INTEROP), interopEnabledBefore, "INTEROP activation changed");
+        assertTrue(systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX), "ETH_LOCKBOX was not activated");
+
+        IETHLockbox lockboxAfter = optimismPortal2.ethLockbox();
+        assertNotEq(address(lockboxAfter), address(0), "portal has no ETHLockbox");
+        if (lockboxEnabledBefore) {
+            assertEq(address(optimismPortal2).balance, portalBalanceBefore, "existing lockbox remigrated liquidity");
+            assertEq(address(lockboxAfter).balance, lockboxBalanceBefore, "existing lockbox balance changed");
+        } else {
+            assertEq(address(optimismPortal2).balance, 0, "legacy portal liquidity not migrated");
+            assertEq(address(lockboxAfter).balance, portalBalanceBefore, "new lockbox did not receive portal liquidity");
+        }
+    }
+
+    /// @notice Tests that the upgrade function reverts when not delegatecalled.
+    function test_upgrade_notDelegateCalled_reverts() public {
+        vm.expectRevert(IOPContractsManagerV2.OPContractsManagerV2_OnlyDelegateCall.selector);
+        opcmV2.upgrade(v2UpgradeInput);
+    }
+
+    /// @notice Tests that the upgrade function reverts if not called by the correct ProxyAdmin
+    ///         owner address.
+    function test_upgrade_notProxyAdminOwner_reverts() public {
+        address delegateCaller = makeAddr("delegateCaller");
+
+        assertNotEq(superchainProxyAdmin.owner(), delegateCaller);
+        assertNotEq(proxyAdmin.owner(), delegateCaller);
+
+        runCurrentUpgradeV2(delegateCaller, "Ownable: caller is not the owner");
+    }
+
+    /// @notice Tests that the upgrade function reverts when the superchainConfig is not at the
+    ///         expected target version.
+    function test_upgrade_superchainConfigNeedsUpgrade_reverts() public {
+        // Force the SuperchainConfig to return an obviously outdated version.
+        vm.mockCall(address(superchainConfig), abi.encodeCall(ISuperchainConfig.version, ()), abi.encode("0.0.0"));
+
+        // Try upgrading an OPChain without upgrading its superchainConfig.
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO,
+            abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_SuperchainConfigNeedsUpgrade.selector)
+        );
+    }
+
+    /// @notice Tests that the V2 upgrade function reverts when the SystemConfig address is zero.
+    function test_upgrade_zeroSystemConfig_reverts() public {
+        v2UpgradeInput.systemConfig = ISystemConfig(address(0));
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidUpgradeInput.selector)
+        );
+    }
+
+    /// @notice Tests that the V2 upgrade function reverts when the user does not provide a game
+    ///         config for each valid game type.
+    function test_upgrade_missingGameConfigs_reverts() public {
+        // Delete the super permissionless game configuration.
+        delete v2UpgradeInput.disputeGameConfigs[4];
+
+        // Expect upgrade to revert.
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that the V2 upgrade function reverts when the user provides the game configs
+    ///         in the wrong order.
+    function test_upgrade_wrongGameConfigOrder_reverts() public {
+        // Swap the game config order.
+        IOPContractsManagerUtils.DisputeGameConfig memory temp = v2UpgradeInput.disputeGameConfigs[0];
+        v2UpgradeInput.disputeGameConfigs[0] = v2UpgradeInput.disputeGameConfigs[1];
+        v2UpgradeInput.disputeGameConfigs[1] = temp;
+
+        // Expect upgrade to revert due to invalid game config order.
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that the upgrade rejects a disabled permissioned game when it remains respected.
+    function test_upgrade_disabledRespectedPermissionedGame_reverts() public {
+        v2UpgradeInput.extraInstructions
+            .push(
+                IOPContractsManagerUtils.ExtraInstruction({
+                    key: "overrides.cfg.startingRespectedGameType", data: abi.encode(GameTypes.SUPER_PERMISSIONED)
+                })
+            );
+        runCurrentUpgradeV2(chainPAO);
+        v2UpgradeInput.extraInstructions.pop();
+        v2UpgradeInput.disputeGameConfigs[3].enabled = false;
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that the V2 upgrade function reverts when SUPER_CANNON_KONA is enabled
+    ///         with a zero absolute prestate.
+    function test_upgrade_superCannonKonaZeroPrestate_reverts() public {
+        v2UpgradeInput.disputeGameConfigs[4] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: true,
+            initBond: DEFAULT_DISPUTE_GAME_INIT_BOND,
+            gameType: GameTypes.SUPER_CANNON_KONA,
+            gameArgs: abi.encode(
+                IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: Claim.wrap(bytes32(0)) })
+            )
+        });
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that the V2 upgrade function rejects the ALL sentinel in permitted proxy
+    ///         deployments.
+    function test_upgrade_allPermittedProxyDeployments_reverts() public {
+        delete v2UpgradeInput.extraInstructions;
+        v2UpgradeInput.extraInstructions
+            .push(IOPContractsManagerUtils.ExtraInstruction({ key: "PermitProxyDeployment", data: abi.encode("ALL") }));
+
+        // Expect upgrade to revert due to invalid upgrade input.
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO,
+            abi.encodeWithSelector(
+                IOPContractsManagerV2.OPContractsManagerV2_InvalidUpgradeInstruction.selector, "PermitProxyDeployment"
+            )
+        );
+    }
+
+    /// @notice Tests that the V2 upgrade function reverts if a permitted proxy deployment is
+    ///         required but missing.
+    function test_upgrade_missingPermittedProxyDeployment_reverts() public {
+        // Simulate a missing DelayedWETH proxy so the upgrade path would need to deploy it.
+        // nosemgrep: sol-style-use-abi-encodecall
+        vm.mockCallRevert(address(systemConfig), abi.encodeWithSelector(ISystemConfig.delayedWETH.selector), "");
+
+        // Expect the upgrade to revert because the DelayedWETH proxy must load but the user did not permit
+        // redeployment.
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO,
+            abi.encodeWithSelector(
+                IOPContractsManagerUtils.OPContractsManagerUtils_ProxyMustLoad.selector, "DelayedWETH"
+            )
+        );
+    }
+
+    /// @notice Tests that the V2 upgrade function reverts when the function that attempts to load
+    ///         an existing proxy returns data that isn't an abi-encoded address.
+    /// @param _len Length of the data to generate.
+    function testFuzz_upgrade_proxyLoadBadReturn_reverts(uint8 _len) public {
+        // Ensure we do not produce a 32-byte payload, which would be interpreted as a valid
+        // abi-encoded address and could change the revert reason.
+        vm.assume(_len != 32);
+
+        // Build an arbitrary bytes payload of length `_len`.
+        bytes memory bad = new bytes(_len);
+        for (uint256 i = 0; i < bad.length; i++) {
+            bad[i] = bytes1(uint8(0xAA));
+        }
+
+        // Mock the first proxy load source call to succeed but return a payload with a length
+        // not equal to 32 bytes, triggering OPContractsManagerUtils_ProxyLoadMustLoad.
+        vm.mockCall(address(systemConfig), abi.encodeCall(ISystemConfig.l1CrossDomainMessenger, ()), bad);
+
+        // Expect a revert without any data (due to abi decoding failure).
+        runCurrentUpgradeV2(chainPAO, EXPECT_REVERT_WITHOUT_DATA);
+    }
+
+    /// @notice Tests that the V2 upgrade function reverts when the function that attempts to load
+    ///         an existing proxy returns the zero address but we asked it to load.
+    function test_upgrade_proxyMustLoadButZeroAddress_reverts() public {
+        // Mock the first proxy load to succeed and return address(0) with 32 bytes,
+        // which triggers OPContractsManagerUtils_ProxyMustLoad since _mustLoad is true in upgrade.
+        vm.mockCall(
+            address(systemConfig), abi.encodeCall(ISystemConfig.l1CrossDomainMessenger, ()), abi.encode(address(0))
+        );
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO,
+            abi.encodeWithSelector(
+                IOPContractsManagerUtils.OPContractsManagerUtils_ProxyMustLoad.selector, "L1CrossDomainMessenger"
+            )
+        );
+    }
+
+    /// @notice Tests that the V2 upgrade function reverts when the function that attempts to load
+    ///         an existing proxy returns an error but we asked it to load.
+    function test_upgrade_proxyMustLoadButReverts_reverts() public {
+        // Mock the first proxy load source to revert, which with _mustLoad=true triggers
+        // OPContractsManagerUtils_ProxyMustLoad.
+        // nosemgrep: sol-style-use-abi-encodecall
+        vm.mockCallRevert(address(systemConfig), abi.encodeCall(ISystemConfig.l1CrossDomainMessenger, ()), bytes(""));
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO,
+            abi.encodeWithSelector(
+                IOPContractsManagerUtils.OPContractsManagerUtils_ProxyMustLoad.selector, "L1CrossDomainMessenger"
+            )
+        );
+    }
+
+    /// @notice Tests that repeatedly upgrading can enable a previously disabled game type.
+    function test_upgrade_enableGameType_succeeds() public {
+        uint256 originalBond = v2UpgradeInput.disputeGameConfigs[4].initBond;
+
+        // The respected game must remain enabled.
+        v2UpgradeInput.disputeGameConfigs[4].enabled = false;
+        v2UpgradeInput.disputeGameConfigs[4].initBond = 0;
+        v2UpgradeInput.extraInstructions
+            .push(
+                IOPContractsManagerUtils.ExtraInstruction({
+                    key: "overrides.cfg.startingRespectedGameType", data: abi.encode(GameTypes.SUPER_PERMISSIONED)
+                })
+            );
+        runCurrentUpgradeV2(chainPAO, hex"", "SCKDG-SHAPE,SCKDG-10");
+        assertEq(
+            address(disputeGameFactory.gameImpls(GameTypes.SUPER_CANNON_KONA)), address(0), "game impl not cleared"
+        );
+
+        v2UpgradeInput.disputeGameConfigs[4].enabled = true;
+        v2UpgradeInput.disputeGameConfigs[4].initBond = originalBond;
+        v2UpgradeInput.extraInstructions.pop();
+        runCurrentUpgradeV2(chainPAO);
+        assertEq(
+            address(disputeGameFactory.gameImpls(GameTypes.SUPER_CANNON_KONA)),
+            opcmV2.implementations().superFaultDisputeGameImpl,
+            "game impl not restored"
+        );
+        assertEq(disputeGameFactory.initBonds(GameTypes.SUPER_CANNON_KONA), originalBond, "init bond not restored");
+    }
+
+    /// @notice Tests that a stale SUPER_CANNON registration left over from a prior OPCM is
+    ///         cleared by the upgrade. SUPER_CANNON is no longer in the OPCMv2 deploy/upgrade
+    ///         allow-list, so the standard 6-config upgrade input does not touch type 4. The
+    ///         StandardValidator's SCDG-SHAPE / SCDG-NOSHAPE checks both require
+    ///         gameImpls(SUPER_CANNON) == address(0), so the upgrade must clear any pre-existing
+    ///         registration unconditionally.
+    function test_upgrade_clearsStaleSuperCannonRegistration_succeeds() public {
+        // Pre-register a fake SUPER_CANNON impl + bond as the current DGF owner.
+        IDisputeGame staleImpl = IDisputeGame(address(0xDEAD));
+        address dgfOwner = disputeGameFactory.owner();
+        vm.startPrank(dgfOwner);
+        disputeGameFactory.setImplementation(GameTypes.SUPER_CANNON, staleImpl, hex"");
+        disputeGameFactory.setInitBond(GameTypes.SUPER_CANNON, 1 ether);
+        vm.stopPrank();
+
+        // Sanity: confirm the stale state is in place pre-upgrade.
+        assertEq(
+            address(disputeGameFactory.gameImpls(GameTypes.SUPER_CANNON)),
+            address(staleImpl),
+            "stale SUPER_CANNON impl not pre-registered"
+        );
+        assertEq(
+            disputeGameFactory.initBonds(GameTypes.SUPER_CANNON), 1 ether, "stale SUPER_CANNON bond not pre-registered"
+        );
+
+        // Run the standard 6-config upgrade. The StandardValidator runs inside
+        // _runOpcmV2UpgradeAndChecks, so a missing clear would fail validation here.
+        runCurrentUpgradeV2(chainPAO);
+
+        // Explicitly assert SUPER_CANNON has been cleared post-upgrade.
+        assertEq(
+            address(disputeGameFactory.gameImpls(GameTypes.SUPER_CANNON)),
+            address(0),
+            "stale SUPER_CANNON impl not cleared"
+        );
+        assertEq(disputeGameFactory.initBonds(GameTypes.SUPER_CANNON), 0, "stale SUPER_CANNON bond not cleared");
+    }
+
+    /// @notice Tests that disabling a game type removes it from the factory.
+    function test_upgrade_disableGameType_succeeds() public {
+        runCurrentUpgradeV2(chainPAO);
+        assertEq(address(disputeGameFactory.gameImpls(GameTypes.CANNON)), address(0), "cannon impl not cleared");
+        assertEq(disputeGameFactory.initBonds(GameTypes.CANNON), 0, "cannon init bond not cleared");
+        assertEq(
+            address(disputeGameFactory.gameImpls(GameTypes.SUPER_CANNON_KONA)),
+            opcmV2.implementations().superFaultDisputeGameImpl,
+            "initial game impl mismatch"
+        );
+
+        // The respected game must remain enabled.
+        v2UpgradeInput.disputeGameConfigs[4].enabled = false;
+        v2UpgradeInput.disputeGameConfigs[4].initBond = 0;
+        v2UpgradeInput.extraInstructions
+            .push(
+                IOPContractsManagerUtils.ExtraInstruction({
+                    key: "overrides.cfg.startingRespectedGameType", data: abi.encode(GameTypes.SUPER_PERMISSIONED)
+                })
+            );
+        runCurrentUpgradeV2(chainPAO, hex"", "SCKDG-SHAPE,SCKDG-10");
+        assertEq(
+            address(disputeGameFactory.gameImpls(GameTypes.SUPER_CANNON_KONA)), address(0), "game impl not cleared"
+        );
+        assertEq(disputeGameFactory.initBonds(GameTypes.SUPER_CANNON_KONA), 0, "init bond not cleared");
+        assertEq(disputeGameFactory.gameArgs(GameTypes.SUPER_CANNON_KONA), bytes(""), "game args not cleared");
+    }
+
+    /// @notice Tests that the upgrade can change the super Cannon Kona prestate.
+    function test_upgrade_updatePrestate_succeeds() public {
+        runCurrentUpgradeV2(chainPAO);
+        assertEq(
+            _gameArgsAbsolutePrestate(GameTypes.SUPER_CANNON_KONA),
+            Claim.unwrap(cannonKonaPrestate),
+            "baseline super cannon kona prestate mismatch"
+        );
+
+        Claim newPrestate = Claim.wrap(bytes32(keccak256("new cannon prestate")));
+        cannonKonaPrestate = newPrestate;
+        v2UpgradeInput.disputeGameConfigs[4].gameArgs =
+            abi.encode(IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: newPrestate }));
+
+        runCurrentUpgradeV2(chainPAO);
+        assertEq(
+            _gameArgsAbsolutePrestate(GameTypes.SUPER_CANNON_KONA),
+            Claim.unwrap(newPrestate),
+            "super cannon kona prestate not updated"
+        );
+    }
+
+    /// @notice Tests that the upgrade function reverts when duplicate non-PermittedProxyDeployment
+    ///         instruction keys are provided.
+    function test_upgrade_duplicateInstructionKeys_reverts() public {
+        delete v2UpgradeInput.extraInstructions;
+        v2UpgradeInput.extraInstructions
+            .push(IOPContractsManagerUtils.ExtraInstruction({ key: "SomeCustomKey", data: bytes("Data1") }));
+        v2UpgradeInput.extraInstructions
+            .push(IOPContractsManagerUtils.ExtraInstruction({ key: "SomeCustomKey", data: bytes("Data2") }));
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO,
+            abi.encodeWithSelector(
+                IOPContractsManagerV2.OPContractsManagerV2_DuplicateUpgradeInstruction.selector, "SomeCustomKey"
+            )
+        );
+    }
+
+    /// @notice Tests that duplicate PermittedProxyDeployment instruction keys are exempt from the
+    ///         duplicate instruction check, so validation carries on to the permission check.
+    function test_upgrade_duplicatePermittedProxyDeploymentKeys_reverts() public {
+        delete v2UpgradeInput.extraInstructions;
+        v2UpgradeInput.extraInstructions
+            .push(
+                IOPContractsManagerUtils.ExtraInstruction({
+                    key: Constants.PERMITTED_PROXY_DEPLOYMENT_KEY, data: bytes("DelayedWETH")
+                })
+            );
+        v2UpgradeInput.extraInstructions
+            .push(
+                IOPContractsManagerUtils.ExtraInstruction({
+                    key: Constants.PERMITTED_PROXY_DEPLOYMENT_KEY, data: bytes("DelayedWETH")
+                })
+            );
+
+        // This upgrade permits no proxy deployments, so the instructions are rejected by the
+        // permission check. Without the duplicate exemption the revert would instead be
+        // OPContractsManagerV2_DuplicateUpgradeInstruction.
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO,
+            abi.encodeWithSelector(
+                IOPContractsManagerV2.OPContractsManagerV2_InvalidUpgradeInstruction.selector,
+                Constants.PERMITTED_PROXY_DEPLOYMENT_KEY
+            )
+        );
+    }
+
+    /// @notice INVARIANT: Upgrades must always work when the system is paused.
+    ///         This test validates that the OPCMv2 upgrade function can execute successfully
+    ///         even when the SuperchainConfig has the system globally paused. This is critical
+    ///         because upgrades may be needed during incident response when the system is paused.
+    function test_upgrade_whenPaused_succeeds() public {
+        // First, pause the system globally using the guardian.
+        address guardian = superchainConfig.guardian();
+        vm.prank(guardian);
+        superchainConfig.pause(address(0));
+
+        // Verify the system is actually paused.
+        assertTrue(superchainConfig.paused(address(0)), "System should be globally paused");
+
+        // Run the upgrade - this should succeed even while paused.
+        // The StandardValidator will report SPRCFG-10 because the system is paused,
+        // but the upgrade itself must complete successfully.
+        runCurrentUpgradeV2(chainPAO, hex"", "SPRCFG-10");
+
+        // Verify the system is still paused after the upgrade.
+        assertTrue(superchainConfig.paused(address(0)), "System should still be paused after upgrade");
+    }
+
+    /// @notice Tests a respected game transition from super permissioned to super Cannon Kona.
+    function test_upgrade_respectedGameTypePermissionedToKona_succeeds() public {
+        v2UpgradeInput.extraInstructions
+            .push(
+                IOPContractsManagerUtils.ExtraInstruction({
+                    key: "overrides.cfg.startingRespectedGameType", data: abi.encode(GameTypes.SUPER_PERMISSIONED)
+                })
+            );
+        runCurrentUpgradeV2(chainPAO);
+        assertEq(anchorStateRegistry.respectedGameType().raw(), GameTypes.SUPER_PERMISSIONED.raw());
+
+        v2UpgradeInput.extraInstructions.pop();
+        v2UpgradeInput.extraInstructions
+            .push(
+                IOPContractsManagerUtils.ExtraInstruction({
+                    key: "overrides.cfg.startingRespectedGameType", data: abi.encode(GameTypes.SUPER_CANNON_KONA)
+                })
+            );
+        runCurrentUpgradeV2(chainPAO);
+        assertEq(
+            anchorStateRegistry.respectedGameType().raw(),
+            GameTypes.SUPER_CANNON_KONA.raw(),
+            "respected game type not updated"
+        );
+    }
+
+    /// @notice Tests that the same respected game override remains valid after an upgrade.
+    function test_upgrade_respectedGameTypeAlreadyKona_succeeds() public {
+        v2UpgradeInput.extraInstructions
+            .push(
+                IOPContractsManagerUtils.ExtraInstruction({
+                    key: "overrides.cfg.startingRespectedGameType", data: abi.encode(GameTypes.SUPER_CANNON_KONA)
+                })
+            );
+        runCurrentUpgradeV2(chainPAO);
+        runCurrentUpgradeV2(chainPAO);
+        assertEq(
+            anchorStateRegistry.respectedGameType().raw(),
+            GameTypes.SUPER_CANNON_KONA.raw(),
+            "respected game type should remain SUPER_CANNON_KONA"
+        );
+    }
+
+    function test_upgrade_respectedGameTypeUnchangedWithoutOverride_succeeds() public {
+        GameType before = anchorStateRegistry.respectedGameType();
+        runCurrentUpgradeV2(chainPAO);
+        assertEq(
+            anchorStateRegistry.respectedGameType().raw(),
+            before.raw(),
+            "respected game type should be unchanged without override"
+        );
+    }
+
+    /// @notice Tests that the upgrade carries the live withdrawal delays forward into proxy storage
+    ///         when no override is given.
+    function test_upgrade_withdrawalDelaysUnchangedWithoutOverride_succeeds() public {
+        uint256 proofMaturityBefore = optimismPortal2.proofMaturityDelaySeconds();
+        uint256 finalityBefore = anchorStateRegistry.disputeGameFinalityDelaySeconds();
+        uint256 wethDelayBefore = delayedWeth.delay();
+
+        runCurrentUpgradeV2(chainPAO);
+
+        assertEq(optimismPortal2.proofMaturityDelaySeconds(), proofMaturityBefore, "proof maturity delay changed");
+        assertEq(anchorStateRegistry.disputeGameFinalityDelaySeconds(), finalityBefore, "finality delay changed");
+        assertEq(delayedWeth.delay(), wethDelayBefore, "withdrawal delay changed");
+        // After the upgrade the values are read from proxy storage (portal slot 64, registry slot 7,
+        // DelayedWETH slot 6).
+        assertEq(uint256(vm.load(address(optimismPortal2), bytes32(uint256(64)))), proofMaturityBefore);
+        assertEq(uint256(vm.load(address(anchorStateRegistry), bytes32(uint256(7)))), finalityBefore);
+        assertEq(uint256(vm.load(address(delayedWeth), bytes32(uint256(6)))), wethDelayBefore);
+    }
+
+    /// @notice Tests that overriding to a disabled game type reverts during upgrade.
+    function test_upgrade_respectedGameTypeOverrideToDisabled_reverts() public {
+        v2UpgradeInput.disputeGameConfigs[4].enabled = false;
+        v2UpgradeInput.disputeGameConfigs[4].initBond = 0;
+        v2UpgradeInput.extraInstructions
+            .push(
+                IOPContractsManagerUtils.ExtraInstruction({
+                    key: "overrides.cfg.startingRespectedGameType", data: abi.encode(GameTypes.SUPER_CANNON_KONA)
+                })
+            );
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that enabling the ZK dispute game registers it in the factory.
+    function test_upgrade_enableZKGame_succeeds() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        address zkImpl = opcmV2.implementations().zkDisputeGameImpl;
+        v2UpgradeInput.disputeGameConfigs[5].enabled = true;
+        v2UpgradeInput.disputeGameConfigs[5].initBond = 1 ether;
+        v2UpgradeInput.disputeGameConfigs[5].gameArgs = abi.encode(
+            IOPContractsManagerUtils.ZKDisputeGameConfig({
+                absolutePrestate: Claim.wrap(bytes32(keccak256("zk prestate"))),
+                maxChallengeDuration: Duration.wrap(uint64(7 days)),
+                maxProveDuration: Duration.wrap(uint64(3 days)),
+                challengerBond: 1 ether
+            })
+        );
+
+        runCurrentUpgradeV2(chainPAO);
+
+        assertEq(
+            address(disputeGameFactory.gameImpls(GameTypes.ZK_DISPUTE_GAME)),
+            zkImpl,
+            "ZK game impl not registered in factory"
+        );
+        assertEq(disputeGameFactory.initBonds(GameTypes.ZK_DISPUTE_GAME), 1 ether, "ZK init bond not set");
+    }
+
+    /// @notice Tests that enabling the ZK dispute game encodes the 140-byte CWIA layout in the
+    ///         factory game args. As a super game, chain scoping comes from the SuperRootProof
+    ///         preimage committed to via rootClaim, so no l2ChainId field is included.
+    function test_upgrade_zkGameArgsLayout_succeeds() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        v2UpgradeInput.disputeGameConfigs[5].enabled = true;
+        v2UpgradeInput.disputeGameConfigs[5].initBond = 1 ether;
+        v2UpgradeInput.disputeGameConfigs[5].gameArgs = abi.encode(
+            IOPContractsManagerUtils.ZKDisputeGameConfig({
+                absolutePrestate: Claim.wrap(bytes32(keccak256("zk prestate"))),
+                maxChallengeDuration: Duration.wrap(uint64(7 days)),
+                maxProveDuration: Duration.wrap(uint64(3 days)),
+                challengerBond: 1 ether
+            })
+        );
+
+        runCurrentUpgradeV2(chainPAO);
+
+        // ZK CWIA args layout:
+        // absolutePrestate(32) + verifier(20) + maxChallengeDuration(8) + maxProveDuration(8)
+        // + challengerBond(32) + anchorStateRegistry(20) + delayedWETH(20) = 140 bytes
+        bytes memory args = disputeGameFactory.gameArgs(GameTypes.ZK_DISPUTE_GAME);
+        assertEq(args.length, 140, "ZK game args length must be 140 bytes (32+20+8+8+32+20+20)");
+        assertEq(
+            LibGameArgs.decodeZK(args).verifier,
+            opcmV2.implementations().sp1PlonkAdapterImpl,
+            "ZK verifier must be the release adapter"
+        );
+    }
+
+    /// @notice Tests that enabling the ZK dispute game with a zero absolute prestate reverts. The
+    ///         prestate is the verification key, so an empty one makes the game unplayable.
+    function test_upgrade_enableZKGameZeroPrestate_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        v2UpgradeInput.disputeGameConfigs[5].enabled = true;
+        v2UpgradeInput.disputeGameConfigs[5].initBond = 1 ether;
+        v2UpgradeInput.disputeGameConfigs[5].gameArgs = abi.encode(
+            IOPContractsManagerUtils.ZKDisputeGameConfig({
+                absolutePrestate: Claim.wrap(bytes32(0)),
+                maxChallengeDuration: Duration.wrap(uint64(7 days)),
+                maxProveDuration: Duration.wrap(uint64(3 days)),
+                challengerBond: 1 ether
+            })
+        );
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Enables the ZK game in the upgrade input with a valid prestate and the given
+    ///         challenge parameters.
+    /// @param _maxChallengeDuration The maximum challenge duration for the game.
+    /// @param _maxProveDuration The maximum prove duration for the game.
+    /// @param _challengerBond The challenger bond for the game.
+    function _setZKUpgradeConfig(
+        uint64 _maxChallengeDuration,
+        uint64 _maxProveDuration,
+        uint256 _challengerBond
+    )
+        internal
+    {
+        v2UpgradeInput.disputeGameConfigs[5].enabled = true;
+        v2UpgradeInput.disputeGameConfigs[5].initBond = 1 ether;
+        v2UpgradeInput.disputeGameConfigs[5].gameArgs = abi.encode(
+            IOPContractsManagerUtils.ZKDisputeGameConfig({
+                absolutePrestate: Claim.wrap(bytes32(keccak256("zk prestate"))),
+                maxChallengeDuration: Duration.wrap(_maxChallengeDuration),
+                maxProveDuration: Duration.wrap(_maxProveDuration),
+                challengerBond: _challengerBond
+            })
+        );
+    }
+
+    /// @notice Tests that enabling the ZK dispute game reverts when the max challenge duration is
+    ///         zero, which lets an unchallenged root win immediately, or above uint32 max, which can
+    ///         overflow the game's uint64 deadline into the past.
+    function test_upgrade_enableZKGameInvalidMaxChallengeDuration_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        uint64[3] memory bad = [uint64(0), uint64(type(uint32).max) + 1, type(uint64).max];
+        for (uint256 i = 0; i < bad.length; i++) {
+            _setZKUpgradeConfig(bad[i], uint64(3 days), 1 ether);
+
+            // nosemgrep: sol-style-use-abi-encodecall
+            runCurrentUpgradeV2(
+                chainPAO, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+            );
+        }
+    }
+
+    /// @notice Tests that enabling the ZK dispute game reverts when the max prove duration is
+    ///         zero or above uint32 max.
+    function test_upgrade_enableZKGameInvalidMaxProveDuration_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        uint64[3] memory bad = [uint64(0), uint64(type(uint32).max) + 1, type(uint64).max];
+        for (uint256 i = 0; i < bad.length; i++) {
+            _setZKUpgradeConfig(uint64(7 days), bad[i], 1 ether);
+
+            // nosemgrep: sol-style-use-abi-encodecall
+            runCurrentUpgradeV2(
+                chainPAO, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+            );
+        }
+    }
+
+    /// @notice Tests that enabling the ZK dispute game reverts when the challenger bond is zero,
+    ///         which would make challenges free.
+    function test_upgrade_enableZKGameZeroChallengerBond_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        _setZKUpgradeConfig(uint64(7 days), uint64(3 days), 0);
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that enabling the ZK dispute game accepts the inclusive bounds: uint32 max
+    ///         durations and a challenger bond of one wei.
+    function test_upgrade_enableZKGameMaxDurations_succeeds() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        _setZKUpgradeConfig(type(uint32).max, type(uint32).max, 1);
+
+        runCurrentUpgradeV2(chainPAO);
+
+        LibGameArgs.ZKGameArgs memory args =
+            LibGameArgs.decodeZK(disputeGameFactory.gameArgs(GameTypes.ZK_DISPUTE_GAME));
+        assertEq(args.maxChallengeDuration, type(uint32).max, "max challenge duration not set");
+        assertEq(args.maxProveDuration, type(uint32).max, "max prove duration not set");
+        assertEq(args.challengerBond, 1, "challenger bond not set");
+    }
+
+    /// @notice Tests that setting ZK config to enabled without the dev feature reverts.
+    function test_upgrade_enableZKGameWithoutDevFeature_reverts() public {
+        // Mock the container to report ZK_DISPUTE_GAME dev feature as disabled, regardless of
+        // what the real deployed container has in its bitmap.
+        vm.mockCall(
+            address(opcmV2.contractsContainer()),
+            abi.encodeCall(IOPContractsManagerContainer.isDevFeatureEnabled, (DevFeatures.ZK_DISPUTE_GAME)),
+            abi.encode(false)
+        );
+
+        v2UpgradeInput.disputeGameConfigs[5].enabled = true;
+        v2UpgradeInput.disputeGameConfigs[5].initBond = 1 ether;
+        v2UpgradeInput.disputeGameConfigs[5].gameArgs = abi.encode(
+            IOPContractsManagerUtils.ZKDisputeGameConfig({
+                absolutePrestate: Claim.wrap(bytes32(keccak256("zk prestate"))),
+                maxChallengeDuration: Duration.wrap(uint64(7 days)),
+                maxProveDuration: Duration.wrap(uint64(3 days)),
+                challengerBond: 1 ether
+            })
+        );
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that the ZK prestate can be rotated while the release adapter remains fixed.
+    function test_upgrade_updateZKPrestate_succeeds() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        // Enable ZK with initial config.
+        v2UpgradeInput.disputeGameConfigs[5].enabled = true;
+        v2UpgradeInput.disputeGameConfigs[5].initBond = 1 ether;
+        v2UpgradeInput.disputeGameConfigs[5].gameArgs = abi.encode(
+            IOPContractsManagerUtils.ZKDisputeGameConfig({
+                absolutePrestate: Claim.wrap(bytes32(keccak256("zk prestate v1"))),
+                maxChallengeDuration: Duration.wrap(uint64(7 days)),
+                maxProveDuration: Duration.wrap(uint64(3 days)),
+                challengerBond: 1 ether
+            })
+        );
+        runCurrentUpgradeV2(chainPAO);
+        bytes memory argsV1 = disputeGameFactory.gameArgs(GameTypes.ZK_DISPUTE_GAME);
+        assertEq(LibGameArgs.decodeZK(argsV1).absolutePrestate, keccak256("zk prestate v1"), "initial ZK prestate");
+
+        address verifierV1 = LibGameArgs.decodeZK(argsV1).verifier;
+
+        // Rotate to a new prestate.
+        v2UpgradeInput.disputeGameConfigs[5].gameArgs = abi.encode(
+            IOPContractsManagerUtils.ZKDisputeGameConfig({
+                absolutePrestate: Claim.wrap(bytes32(keccak256("zk prestate v2"))),
+                maxChallengeDuration: Duration.wrap(uint64(7 days)),
+                maxProveDuration: Duration.wrap(uint64(3 days)),
+                challengerBond: 1 ether
+            })
+        );
+        runCurrentUpgradeV2(chainPAO);
+        bytes memory argsV2 = disputeGameFactory.gameArgs(GameTypes.ZK_DISPUTE_GAME);
+
+        assertEq(LibGameArgs.decodeZK(argsV2).absolutePrestate, keccak256("zk prestate v2"), "ZK prestate not updated");
+        assertEq(LibGameArgs.decodeZK(argsV2).verifier, verifierV1, "release verifier must not rotate per chain");
+    }
+
+    /// @notice Tests that disabling the ZK game sets the init bond to zero in the factory.
+    function test_upgrade_disableZKGame_succeeds() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        // First enable ZK game.
+        v2UpgradeInput.disputeGameConfigs[5].enabled = true;
+        v2UpgradeInput.disputeGameConfigs[5].initBond = 1 ether;
+        v2UpgradeInput.disputeGameConfigs[5].gameArgs = abi.encode(
+            IOPContractsManagerUtils.ZKDisputeGameConfig({
+                absolutePrestate: Claim.wrap(bytes32(keccak256("zk prestate"))),
+                maxChallengeDuration: Duration.wrap(uint64(7 days)),
+                maxProveDuration: Duration.wrap(uint64(3 days)),
+                challengerBond: 1 ether
+            })
+        );
+        runCurrentUpgradeV2(chainPAO);
+        assertEq(disputeGameFactory.initBonds(GameTypes.ZK_DISPUTE_GAME), 1 ether, "ZK init bond should be set");
+
+        // Now disable ZK game.
+        v2UpgradeInput.disputeGameConfigs[5].enabled = false;
+        v2UpgradeInput.disputeGameConfigs[5].initBond = 0;
+        runCurrentUpgradeV2(chainPAO);
+        assertEq(
+            disputeGameFactory.initBonds(GameTypes.ZK_DISPUTE_GAME), 0, "ZK init bond should be zero after disable"
+        );
+    }
+
+    /// @notice Tests that enabling a game type with a zero container implementation reverts.
+    function test_upgrade_enabledGameWithZeroImpl_reverts() public {
+        // The default config enables super Cannon Kona.
+        IOPContractsManagerContainer.Implementations memory impls = opcmV2.implementations();
+        impls.superFaultDisputeGameImpl = address(0);
+
+        vm.mockCall(
+            address(opcmV2.contractsContainer()),
+            abi.encodeCall(IOPContractsManagerContainer.implementations, ()),
+            abi.encode(impls)
+        );
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO,
+            abi.encodeWithSelector(
+                IOPContractsManagerV2.OPContractsManagerV2_ZeroGameImplementation.selector, GameTypes.SUPER_CANNON_KONA
+            )
+        );
+    }
+
+    /// @notice Tests that v9 rejects anchor overrides with the migration feature enabled.
+    function test_upgrade_anchorOverride_reverts() public {
+        v2UpgradeInput.extraInstructions
+            .push(
+                IOPContractsManagerUtils.ExtraInstruction({
+                    key: "overrides.cfg.startingAnchorRoot",
+                    data: abi.encode(Proposal({ root: Hash.wrap(bytes32(uint256(0xDEADBEEF))), l2SequenceNumber: 999 }))
+                })
+            );
+
+        // V9 must preserve the anchor established before this upgrade.
+        // nosemgrep: sol-style-use-abi-encodecall
+        runCurrentUpgradeV2(
+            chainPAO,
+            abi.encodeWithSelector(
+                IOPContractsManagerV2.OPContractsManagerV2_InvalidUpgradeInstruction.selector,
+                "overrides.cfg.startingAnchorRoot"
+            )
+        );
+    }
+
+    /// @notice Tests the v8 migration and v9 upgrade, or a v9 upgrade of an existing super-root chain.
+    function test_upgrade_superRootMigration_succeeds() public {
+        skipIfNotForkTest("FeatSuperRootMigration: only runs in forked tests");
+        skipIfDevFeatureDisabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        GameType targetGameType = anchorStateRegistry.respectedGameType();
+        (Hash anchorBefore, uint256 sequenceBefore) = anchorStateRegistry.getAnchorRoot();
+        address anchorGameBefore = address(anchorStateRegistry.anchorGame());
+
+        // Run the upgrade. StandardValidator handles super mode — no legacy game errors.
+        runCurrentUpgradeV2(chainPAO);
+
+        // Verify legacy game types are disabled.
+        assertEq(address(disputeGameFactory.gameImpls(GameTypes.CANNON)), address(0), "CANNON impl not cleared");
+        assertEq(disputeGameFactory.initBonds(GameTypes.CANNON), 0, "CANNON bond not cleared");
+        assertEq(
+            address(disputeGameFactory.gameImpls(GameTypes.PERMISSIONED_CANNON)),
+            address(0),
+            "PERMISSIONED_CANNON impl not cleared"
+        );
+        assertEq(disputeGameFactory.initBonds(GameTypes.PERMISSIONED_CANNON), 0, "PERMISSIONED_CANNON bond not cleared");
+        assertEq(
+            address(disputeGameFactory.gameImpls(GameTypes.CANNON_KONA)), address(0), "CANNON_KONA impl not cleared"
+        );
+        assertEq(disputeGameFactory.initBonds(GameTypes.CANNON_KONA), 0, "CANNON_KONA bond not cleared");
+        assertEq(
+            address(disputeGameFactory.gameImpls(GameTypes.SUPER_CANNON)), address(0), "SUPER_CANNON impl not cleared"
+        );
+        assertEq(disputeGameFactory.initBonds(GameTypes.SUPER_CANNON), 0, "SUPER_CANNON bond not cleared");
+
+        // Verify new super game type is registered.
+        assertTrue(
+            address(disputeGameFactory.gameImpls(GameTypes.SUPER_PERMISSIONED)) != address(0),
+            "SUPER_PERMISSIONED not registered"
+        );
+        assertTrue(
+            address(disputeGameFactory.gameImpls(GameTypes.SUPER_CANNON_KONA)) != address(0),
+            "SUPER_CANNON_KONA not registered"
+        );
+
+        // V9 must preserve the valid super-root anchor.
+        (Hash anchorAfter, uint256 sequenceAfter) = anchorStateRegistry.getAnchorRoot();
+        assertEq(anchorAfter.raw(), anchorBefore.raw(), "anchor root changed");
+        assertEq(sequenceAfter, sequenceBefore, "anchor sequence changed");
+        assertEq(address(anchorStateRegistry.anchorGame()), anchorGameBefore, "anchor game changed");
+        assertEq(anchorStateRegistry.respectedGameType().raw(), targetGameType.raw(), "respected game type not updated");
+    }
+
+    /// @notice Tests that repeated upgrades preserve the super anchor and pass standard validation.
+    function test_upgrade_idempotentWithSuperRootFlag_succeeds() public {
+        skipIfNotForkTest("FeatSuperRootMigration: only runs in forked tests");
+        skipIfDevFeatureDisabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        GameType targetGameType = anchorStateRegistry.respectedGameType();
+        (Hash anchorBefore, uint256 sequenceBefore) = anchorStateRegistry.getAnchorRoot();
+        address anchorGameBefore = address(anchorStateRegistry.anchorGame());
+
+        runCurrentUpgradeV2(chainPAO);
+        runCurrentUpgradeV2(chainPAO);
+
+        assertEq(anchorStateRegistry.respectedGameType().raw(), targetGameType.raw(), "second upgrade: game type");
+        {
+            (Hash anchorAfter, uint256 sequenceAfter) = anchorStateRegistry.getAnchorRoot();
+            assertEq(anchorAfter.raw(), anchorBefore.raw(), "second upgrade: anchor root");
+            assertEq(sequenceAfter, sequenceBefore, "second upgrade: anchor sequence");
+            assertEq(address(anchorStateRegistry.anchorGame()), anchorGameBefore, "second upgrade: anchor game");
+        }
+        assertTrue(
+            address(disputeGameFactory.gameImpls(GameTypes.SUPER_PERMISSIONED)) != address(0),
+            "second upgrade: SUPER_PERMISSIONED"
+        );
+        assertEq(
+            address(disputeGameFactory.gameImpls(GameTypes.CANNON)), address(0), "second upgrade: CANNON still disabled"
+        );
+    }
+
+    /// @notice Tests that future fork-live setup still works after the current upgrade has already been applied.
+    function test_forkLiveSetup_currentUpgradeAlreadyApplied_succeeds() public {
+        skipIfNotForkTest("FutureForkLiveSetup: only runs in forked tests");
+
+        // First apply the current upgrade. The fork state now represents a future live chain
+        // where this upgrade has already landed.
+        runCurrentUpgradeV2(chainPAO);
+
+        // Rerun the same setup path normal fork-live tests use. This must rediscover addresses
+        // from the already-upgraded state and reapply the current upgrade idempotently.
+        deploy.cfg().setUseUpgradedFork(true);
+        forkL1Live.run();
+        _reloadForkLiveContracts();
+
+        // Reapply through the upgrade test helper too, so StandardValidator runs after rereading
+        // fork-live artifacts from the already-upgraded state.
+        runCurrentUpgradeV2(chainPAO);
+    }
+}
+
+/// @title OPContractsManagerV2_IsPermittedUpgradeSequence_Test
+/// @notice Tests OPContractsManagerV2.isPermittedUpgradeSequence
+contract OPContractsManagerV2_IsPermittedUpgradeSequence_Test is OPContractsManagerV2_TestInit {
+    /// @notice Tests that the upgrade sequence is permitted when using the same OPCM (re-running upgrade).
+    function test_isPermittedUpgradeSequence_sameOPCM_succeeds() public {
+        // Mock the OPCM version to be >= 8.0.0 so the check activates.
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("8.0.0"));
+
+        // Mock lastUsedOPCM to return the same OPCM address.
+        vm.mockCall(address(systemConfig), abi.encodeCall(ISystemConfig.lastUsedOPCM, ()), abi.encode(address(opcmV2)));
+
+        // Should return true because it's the same OPCM.
+        assertTrue(opcmV2.isPermittedUpgradeSequence(systemConfig), "same OPCM should be permitted");
+    }
+
+    /// @notice Tests that the upgrade sequence is permitted when upgrading to same major but higher minor.
+    function test_isPermittedUpgradeSequence_sameMajorHigherMinor_succeeds() public {
+        // Create a mock address for the "old" OPCM.
+        address oldOPCM = makeAddr("oldOPCM");
+
+        // Mock the current OPCM version to be 8.1.0.
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("8.1.0"));
+
+        // Mock lastUsedOPCM to return the old OPCM address.
+        vm.mockCall(address(systemConfig), abi.encodeCall(ISystemConfig.lastUsedOPCM, ()), abi.encode(oldOPCM));
+
+        // Mock the old OPCM version to be 8.0.0.
+        vm.mockCall(oldOPCM, abi.encodeCall(ISemver.version, ()), abi.encode("8.0.0"));
+
+        // Should return true because 8.1.0 > 8.0.0 (same major, higher minor).
+        assertTrue(opcmV2.isPermittedUpgradeSequence(systemConfig), "same major higher minor should be permitted");
+    }
+
+    /// @notice Tests that the upgrade sequence is permitted when upgrading to the next major version.
+    function test_isPermittedUpgradeSequence_nextMajorVersion_succeeds() public {
+        // Create a mock address for the "old" OPCM.
+        address oldOPCM = makeAddr("oldOPCM");
+
+        // Mock the current OPCM version to be 9.0.0.
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("9.0.0"));
+
+        // Mock lastUsedOPCM to return the old OPCM address.
+        vm.mockCall(address(systemConfig), abi.encodeCall(ISystemConfig.lastUsedOPCM, ()), abi.encode(oldOPCM));
+
+        // Mock the old OPCM version to be 8.2.0.
+        vm.mockCall(oldOPCM, abi.encodeCall(ISemver.version, ()), abi.encode("8.2.0"));
+
+        // Should return true because 9.0.0 is the next major after 8.x.x.
+        assertTrue(opcmV2.isPermittedUpgradeSequence(systemConfig), "next major version should be permitted");
+    }
+
+    /// @notice Tests that the upgrade sequence is not permitted when downgrading (same major, lower minor).
+    function test_isPermittedUpgradeSequence_sameMajorLowerMinor_fails() public {
+        // Create a mock address for the "old" OPCM.
+        address oldOPCM = makeAddr("oldOPCM");
+
+        // Mock the current OPCM version to be 8.0.0.
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("8.0.0"));
+
+        // Mock lastUsedOPCM to return the old OPCM address.
+        vm.mockCall(address(systemConfig), abi.encodeCall(ISystemConfig.lastUsedOPCM, ()), abi.encode(oldOPCM));
+
+        // Mock the old OPCM version to be 8.1.0.
+        vm.mockCall(oldOPCM, abi.encodeCall(ISemver.version, ()), abi.encode("8.1.0"));
+
+        // Should return false because 8.0.0 < 8.1.0 (downgrade).
+        assertFalse(opcmV2.isPermittedUpgradeSequence(systemConfig), "same major lower minor should not be permitted");
+    }
+
+    /// @notice Tests that the upgrade sequence is not permitted when using same minor with different OPCM.
+    function test_isPermittedUpgradeSequence_sameMajorSameMinor_fails() public {
+        // Create a mock address for the "old" OPCM.
+        address oldOPCM = makeAddr("oldOPCM");
+
+        // Mock the current OPCM version to be 8.1.0.
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("8.1.0"));
+
+        // Mock lastUsedOPCM to return the old OPCM address.
+        vm.mockCall(address(systemConfig), abi.encodeCall(ISystemConfig.lastUsedOPCM, ()), abi.encode(oldOPCM));
+
+        // Mock the old OPCM version to be 8.1.0.
+        vm.mockCall(oldOPCM, abi.encodeCall(ISemver.version, ()), abi.encode("8.1.0"));
+
+        // Should return false because 8.1.0 == 8.1.0 (not higher).
+        assertFalse(opcmV2.isPermittedUpgradeSequence(systemConfig), "same major same minor should not be permitted");
+    }
+
+    /// @notice Tests that the upgrade sequence is not permitted when skipping major versions.
+    function test_isPermittedUpgradeSequence_skipMajorVersion_fails() public {
+        // Create a mock address for the "old" OPCM.
+        address oldOPCM = makeAddr("oldOPCM");
+
+        // Mock the current OPCM version to be 10.0.0.
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("10.0.0"));
+
+        // Mock lastUsedOPCM to return the old OPCM address.
+        vm.mockCall(address(systemConfig), abi.encodeCall(ISystemConfig.lastUsedOPCM, ()), abi.encode(oldOPCM));
+
+        // Mock the old OPCM version to be 8.0.0.
+        vm.mockCall(oldOPCM, abi.encodeCall(ISemver.version, ()), abi.encode("8.0.0"));
+
+        // Should return false because 10.0.0 skips major version 9.
+        assertFalse(opcmV2.isPermittedUpgradeSequence(systemConfig), "skipping major version should not be permitted");
+    }
+
+    /// @notice Tests that the upgrade sequence is not permitted when downgrading major versions.
+    function test_isPermittedUpgradeSequence_downgradeMajorVersion_fails() public {
+        // Create a mock address for the "old" OPCM.
+        address oldOPCM = makeAddr("oldOPCM");
+
+        // Mock the current OPCM version to be 8.0.0.
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("8.0.0"));
+
+        // Mock lastUsedOPCM to return the old OPCM address.
+        vm.mockCall(address(systemConfig), abi.encodeCall(ISystemConfig.lastUsedOPCM, ()), abi.encode(oldOPCM));
+
+        // Mock the old OPCM version to be 9.0.0.
+        vm.mockCall(oldOPCM, abi.encodeCall(ISemver.version, ()), abi.encode("9.0.0"));
+
+        // Should return false because 8.0.0 < 9.0.0 (major downgrade).
+        assertFalse(opcmV2.isPermittedUpgradeSequence(systemConfig), "major downgrade should not be permitted");
+    }
+
+    /// @notice Tests that the upgrade sequence check returns true for OPCM versions < 8.0.0.
+    function test_isPermittedUpgradeSequence_versionBelowThreshold_succeeds() public {
+        // Create a mock address for the "old" OPCM that would fail the check if it ran.
+        address oldOPCM = makeAddr("oldOPCM");
+
+        // Mock the current OPCM version to be 7.0.0 (below threshold).
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("7.0.0"));
+
+        // Mock lastUsedOPCM to return the old OPCM address.
+        vm.mockCall(address(systemConfig), abi.encodeCall(ISystemConfig.lastUsedOPCM, ()), abi.encode(oldOPCM));
+
+        // Mock the old OPCM version to be 10.0.0 (would fail if check ran).
+        vm.mockCall(oldOPCM, abi.encodeCall(ISemver.version, ()), abi.encode("10.0.0"));
+
+        // Should return true because the check is skipped for versions < 8.0.0.
+        assertTrue(opcmV2.isPermittedUpgradeSequence(systemConfig), "version below threshold should be permitted");
+    }
+
+    /// @notice Tests that the upgrade sequence check returns true for initial deployments.
+    function test_isPermittedUpgradeSequence_initialDeployment_succeeds() public view {
+        // Should return true for initial deployments (address(0) SystemConfig).
+        assertTrue(
+            opcmV2.isPermittedUpgradeSequence(ISystemConfig(address(0))), "initial deployment should be permitted"
+        );
+    }
+}
+
+/// @title OPContractsManagerV2_UpgradeSuperchain_Test
+/// @notice Tests OPContractsManagerV2.upgradeSuperchain
+contract OPContractsManagerV2_UpgradeSuperchain_Test is OPContractsManagerV2_Upgrade_TestInit {
+    /// @notice Input for the upgradeSuperchain function.
+    IOPContractsManagerV2.SuperchainUpgradeInput internal superchainUpgradeInput;
+
+    /// @notice Sets up the test.
+    function setUp() public override {
+        super.setUp();
+
+        // Set the superchain config.
+        // No extra instructions, so don't set them.
+        superchainUpgradeInput.superchainConfig = superchainConfig;
+    }
+
+    /// @notice Tests that the upgradeSuperchain function succeeds when the superchainConfig is at
+    ///         the expected version and the delegate caller is the SuperchainConfig PAO.
+    function test_upgradeSuperchain_succeeds() public {
+        // Expect the SuperchainConfig to be upgraded.
+        address superchainConfigImpl = opcmV2.implementations().superchainConfigImpl;
+        vm.expectEmit(address(superchainConfig));
+        emit Upgraded(superchainConfigImpl);
+
+        // Do the upgrade.
+        prankDelegateCall(superchainPAO);
+        (bool success,) = address(opcmV2)
+            .delegatecall(abi.encodeCall(IOPContractsManagerV2.upgradeSuperchain, (superchainUpgradeInput)));
+        assertTrue(success, "upgradeSuperchain failed");
+    }
+
+    /// @notice Tests that the upgradeSuperchain function reverts when not delegatecalled.
+    function test_upgradeSuperchain_notDelegateCalled_reverts() public {
+        vm.expectRevert(IOPContractsManagerV2.OPContractsManagerV2_OnlyDelegateCall.selector);
+        opcmV2.upgradeSuperchain(superchainUpgradeInput);
+    }
+
+    /// @notice Tests that the upgradeSuperchain function reverts when the delegate caller is not
+    ///         the superchainProxyAdmin owner.
+    function test_upgradeSuperchain_notProxyAdminOwner_reverts() public {
+        // Make a new address for testing.
+        address delegateCaller = makeAddr("delegateCaller");
+
+        // Sanity check that the address we generated isn't the superchainPAO or chainPAO.
+        assertNotEq(superchainPAO, delegateCaller);
+        assertNotEq(chainPAO, delegateCaller);
+
+        // Should revert.
+        vm.expectRevert("Ownable: caller is not the owner");
+        prankDelegateCall(delegateCaller);
+        (bool success,) = address(opcmV2)
+            .delegatecall(abi.encodeCall(IOPContractsManagerV2.upgradeSuperchain, (superchainUpgradeInput)));
+        assertTrue(success, "upgradeSuperchain failed");
+    }
+
+    /// @notice Tests that the upgradeSuperchain function reverts when the superchainConfig version
+    ///         is the same or newer than the target version.
+    function test_upgradeSuperchain_superchainConfigAlreadyUpToDate_reverts() public {
+        ISuperchainConfig superchainConfig = ISuperchainConfig(artifacts.mustGetAddress("SuperchainConfigProxy"));
+
+        // Set the version of the superchain config to a version that is the target version.
+        vm.clearMockedCalls();
+
+        // Mock the SuperchainConfig to return a very large version.
+        vm.mockCall(address(superchainConfig), abi.encodeCall(ISuperchainConfig.version, ()), abi.encode("99.99.99"));
+
+        // Should revert.
+        // nosemgrep: sol-style-use-abi-encodecall
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IOPContractsManagerUtils.OPContractsManagerUtils_DowngradeNotAllowed.selector, address(superchainConfig)
+            )
+        );
+        prankDelegateCall(superchainPAO);
+        (bool success,) = address(opcmV2)
+            .delegatecall(abi.encodeCall(IOPContractsManagerV2.upgradeSuperchain, (superchainUpgradeInput)));
+        assertTrue(success, "upgradeSuperchain failed");
+    }
+}
+
+/// @title OPContractsManagerV2_Deploy_Test
+/// @notice Tests OPContractsManagerV2.deploy
+contract OPContractsManagerV2_Deploy_Test is OPContractsManagerV2_TestInit {
+    using stdStorage for StdStorage;
+
+    /// @notice Default deploy config.
+    IOPContractsManagerV2.FullConfig deployConfig;
+
+    /// @notice Sets up the test.
+    function setUp() public virtual override {
+        super.setUp();
+
+        // Set up default deploy config.
+        // We can't set storage structs directly, so we need to set each field individually.
+        deployConfig.saltMixer = "test-salt-mixer";
+        deployConfig.superchainConfig = superchainConfig;
+        deployConfig.proxyAdminOwner = makeAddr("proxyAdminOwner");
+        deployConfig.systemConfigOwner = makeAddr("systemConfigOwner");
+        deployConfig.unsafeBlockSigner = makeAddr("unsafeBlockSigner");
+        deployConfig.batcher = makeAddr("batcher");
+        deployConfig.startingAnchorRoot = Proposal({ root: Hash.wrap(bytes32(hex"1234")), l2SequenceNumber: 123 });
+        bool superRoot = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+        deployConfig.startingRespectedGameType =
+            superRoot ? GameTypes.SUPER_PERMISSIONED : GameTypes.PERMISSIONED_CANNON;
+        deployConfig.basefeeScalar = 1368;
+        deployConfig.blobBasefeeScalar = 801949;
+        deployConfig.gasLimit = 60_000_000;
+        deployConfig.l2ChainId = 999_999_999;
+        deployConfig.proofMaturityDelaySeconds = 604800;
+        deployConfig.disputeGameFinalityDelaySeconds = 302400;
+        deployConfig.withdrawalDelaySeconds = 302400;
+        deployConfig.resourceConfig = IResourceMetering.ResourceConfig({
+            maxResourceLimit: 20_000_000,
+            elasticityMultiplier: 10,
+            baseFeeMaxChangeDenominator: 8,
+            minimumBaseFee: 1 gwei,
+            systemTxMaxGas: 1_000_000,
+            maximumBaseFee: type(uint128).max
+        });
+
+        // In super root mode, SUPER_PERMISSIONED is enabled; otherwise PERMISSIONED_CANNON.
+        address initialChallenger = makeAddr("deployChallenger");
+        address initialProposer = makeAddr("deployProposer");
+        IOPContractsManagerUtils.PermissionedDisputeGameConfig memory pdgConfig =
+            IOPContractsManagerUtils.PermissionedDisputeGameConfig({
+                absolutePrestate: cannonPrestate, proposer: initialProposer, challenger: initialChallenger
+            });
+        IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig memory superPdgConfig =
+            IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig({ proposer: initialProposer });
+
+        deployConfig.disputeGameConfigs
+            .push(
+                IOPContractsManagerUtils.DisputeGameConfig({
+                    enabled: false, initBond: 0, gameType: GameTypes.CANNON, gameArgs: bytes("")
+                })
+            );
+        deployConfig.disputeGameConfigs
+            .push(
+                IOPContractsManagerUtils.DisputeGameConfig({
+                    enabled: !superRoot,
+                    initBond: superRoot ? 0 : DEFAULT_DISPUTE_GAME_INIT_BOND,
+                    gameType: GameTypes.PERMISSIONED_CANNON,
+                    gameArgs: superRoot ? bytes("") : abi.encode(pdgConfig)
+                })
+            );
+        deployConfig.disputeGameConfigs
+            .push(
+                IOPContractsManagerUtils.DisputeGameConfig({
+                    enabled: false, initBond: 0, gameType: GameTypes.CANNON_KONA, gameArgs: bytes("")
+                })
+            );
+        deployConfig.disputeGameConfigs
+            .push(
+                IOPContractsManagerUtils.DisputeGameConfig({
+                    enabled: superRoot,
+                    initBond: 0,
+                    gameType: GameTypes.SUPER_PERMISSIONED,
+                    gameArgs: superRoot ? abi.encode(superPdgConfig) : bytes("")
+                })
+            );
+        deployConfig.disputeGameConfigs
+            .push(
+                IOPContractsManagerUtils.DisputeGameConfig({
+                    enabled: false, initBond: 0, gameType: GameTypes.SUPER_CANNON_KONA, gameArgs: bytes("")
+                })
+            );
+        deployConfig.disputeGameConfigs
+            .push(
+                IOPContractsManagerUtils.DisputeGameConfig({
+                    enabled: false,
+                    initBond: 0,
+                    gameType: GameTypes.ZK_DISPUTE_GAME,
+                    gameArgs: abi.encode(
+                        IOPContractsManagerUtils.ZKDisputeGameConfig({
+                            absolutePrestate: Claim.wrap(bytes32(0)),
+                            maxChallengeDuration: Duration.wrap(0),
+                            maxProveDuration: Duration.wrap(0),
+                            challengerBond: 0
+                        })
+                    )
+                })
+            );
+    }
+
+    /// @notice Enables the PERMISSIONED_CANNON game config.
+    function _enablePermissionedCannonGame() internal {
+        deployConfig.disputeGameConfigs[1] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: true,
+            initBond: DEFAULT_DISPUTE_GAME_INIT_BOND,
+            gameType: GameTypes.PERMISSIONED_CANNON,
+            gameArgs: abi.encode(
+                IOPContractsManagerUtils.PermissionedDisputeGameConfig({
+                    absolutePrestate: cannonPrestate,
+                    proposer: makeAddr("deployProposer"),
+                    challenger: makeAddr("deployChallenger")
+                })
+            )
+        });
+    }
+
+    /// @notice Disables the PERMISSIONED_CANNON game config.
+    function _disablePermissionedCannonGame() internal {
+        deployConfig.disputeGameConfigs[1].enabled = false;
+        deployConfig.disputeGameConfigs[1].initBond = 0;
+        deployConfig.disputeGameConfigs[1].gameArgs = bytes("");
+    }
+
+    /// @notice Enables the CANNON_KONA game config.
+    function _enableCannonKonaGame() internal {
+        deployConfig.disputeGameConfigs[2] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: true,
+            initBond: DEFAULT_DISPUTE_GAME_INIT_BOND,
+            gameType: GameTypes.CANNON_KONA,
+            gameArgs: abi.encode(
+                IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: cannonKonaPrestate })
+            )
+        });
+    }
+
+    /// @notice Enables the SUPER_PERMISSIONED game config.
+    function _enableSuperPermissionedGame() internal {
+        deployConfig.disputeGameConfigs[3] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: true,
+            initBond: 0,
+            gameType: GameTypes.SUPER_PERMISSIONED,
+            gameArgs: abi.encode(
+                IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig({ proposer: makeAddr("deployProposer") })
+            )
+        });
+    }
+
+    /// @notice Disables the SUPER_PERMISSIONED game config.
+    function _disableSuperPermissionedGame() internal {
+        deployConfig.disputeGameConfigs[3].enabled = false;
+        deployConfig.disputeGameConfigs[3].initBond = 0;
+        deployConfig.disputeGameConfigs[3].gameArgs = bytes("");
+    }
+
+    /// @notice Enables the SUPER_CANNON_KONA game config.
+    function _enableSuperCannonKonaGame() internal {
+        deployConfig.disputeGameConfigs[4] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: true,
+            initBond: DEFAULT_DISPUTE_GAME_INIT_BOND,
+            gameType: GameTypes.SUPER_CANNON_KONA,
+            gameArgs: abi.encode(
+                IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: cannonKonaPrestate })
+            )
+        });
+    }
+
+    /// @notice Recreates the legacy disabled-lockbox storage state for upgrade tests.
+    function _setLegacyLockboxState(ISystemConfig _systemConfig, IOptimismPortal2 _portal) internal {
+        stdstore.target(address(_systemConfig))
+            .sig("isFeatureEnabled(bytes32)")
+            .with_key(Features.ETH_LOCKBOX)
+            .checked_write(false);
+        stdstore.target(address(_systemConfig))
+            .sig("isFeatureEnabled(bytes32)")
+            .with_key(Features.INTEROP)
+            .checked_write(false);
+        StorageSlot memory slot = ForgeArtifacts.getSlot("OptimismPortal2", "ethLockbox");
+        vm.store(address(_portal), bytes32(slot.slot), bytes32(0));
+        assertFalse(_systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX));
+        assertEq(address(_portal.ethLockbox()), address(0));
+    }
+
+    /// @notice Tests lockbox deployment permission and first activation without requiring a fork.
+    function test_upgrade_missingLockbox_succeeds() public {
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("9.0.0"));
+        _testUpgradeMissingLockbox(false, false);
+    }
+
+    /// @notice Tests that a CGT chain without a lockbox can upgrade without migrating portal ETH.
+    function test_upgrade_missingLockboxCGT_succeeds() public {
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("9.0.0"));
+        _testUpgradeMissingLockbox(true, false);
+    }
+
+    /// @notice Tests first lockbox activation with a v9 development version.
+    function test_upgrade_missingLockboxV9Dev_succeeds() public {
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("9.0.0-dev"));
+        _testUpgradeMissingLockbox(false, false);
+    }
+
+    /// @notice Tests liquidity migration when the flag was enabled without configuring a lockbox.
+    function test_upgrade_missingLockboxFeatureEnabled_succeeds() public {
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("9.0.0"));
+        _testUpgradeMissingLockbox(false, true);
+    }
+
+    /// @notice Tests that an enabled flag without a lockbox does not migrate CGT portal ETH.
+    function test_upgrade_missingLockboxCGTFeatureEnabled_succeeds() public {
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode("9.0.0"));
+        _testUpgradeMissingLockbox(true, true);
+    }
+
+    /// @notice Tests that v8 rejects the ETHLockbox deployment instruction.
+    function test_upgrade_lockboxInstructionV8_reverts() public {
+        _assertUpgradeInstructionRejected("8.0.4", Constants.PERMITTED_PROXY_DEPLOYMENT_KEY, bytes("ETHLockbox"));
+    }
+
+    /// @notice Tests that the ETHLockbox deployment allowance expires in v10.
+    function test_upgrade_lockboxInstructionV10_reverts() public {
+        _assertUpgradeInstructionRejected("10.0.0", Constants.PERMITTED_PROXY_DEPLOYMENT_KEY, bytes("ETHLockbox"));
+    }
+
+    /// @notice Tests that the per-chain withdrawal delays cannot be overridden during an upgrade.
+    ///         The live values are always carried forward; only the L1PAO setters change them.
+    function test_upgrade_withdrawalDelayInstructions_reverts() public {
+        string memory version = opcmV2.version();
+        _assertUpgradeInstructionRejected(
+            version, "overrides.cfg.proofMaturityDelaySeconds", abi.encode(uint256(1 days))
+        );
+        _assertUpgradeInstructionRejected(
+            version, "overrides.cfg.disputeGameFinalityDelaySeconds", abi.encode(uint256(12 hours))
+        );
+        _assertUpgradeInstructionRejected(
+            version, "overrides.cfg.withdrawalDelaySeconds", abi.encode(uint256(12 hours))
+        );
+    }
+
+    /// @notice Tests that the anchor root override remains unavailable in v9.
+    function test_upgrade_anchorRootInstructionV9_reverts() public {
+        _assertUpgradeInstructionRejected(
+            "9.0.0", "overrides.cfg.startingAnchorRoot", abi.encode(deployConfig.startingAnchorRoot)
+        );
+    }
+
+    /// @notice Checks that an upgrade rejects an instruction at the specified OPCM version.
+    /// @param _version The OPCM version to simulate.
+    /// @param _key The instruction key.
+    /// @param _data The instruction data.
+    function _assertUpgradeInstructionRejected(
+        string memory _version,
+        string memory _key,
+        bytes memory _data
+    )
+        internal
+    {
+        vm.mockCall(address(opcmV2), abi.encodeCall(IOPContractsManagerV2.version, ()), abi.encode(_version));
+        IOPContractsManagerV2.UpgradeInput memory input;
+        input.systemConfig = systemConfig;
+        input.extraInstructions = new IOPContractsManagerUtils.ExtraInstruction[](1);
+        input.extraInstructions[0] = IOPContractsManagerUtils.ExtraInstruction({ key: _key, data: _data });
+        prankDelegateCall(proxyAdmin.owner());
+        (bool success, bytes memory reason) =
+            address(opcmV2).delegatecall(abi.encodeCall(IOPContractsManagerV2.upgrade, (input)));
+        assertFalse(success);
+        // nosemgrep: sol-style-use-abi-encodecall
+        assertEq(
+            reason,
+            abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidUpgradeInstruction.selector, _key)
+        );
+    }
+
+    /// @notice Tests first lockbox activation and repeat upgrades for ETH and CGT chains.
+    /// @param _useCustomGasToken Whether the chain uses a custom gas token.
+    /// @param _enableFeatureBeforeUpgrade Whether to enable the flag without configuring a lockbox.
+    function _testUpgradeMissingLockbox(bool _useCustomGasToken, bool _enableFeatureBeforeUpgrade) internal {
+        deployConfig.useCustomGasToken = _useCustomGasToken;
+        IOPContractsManagerV2.ChainContracts memory cts = opcmV2.deploy(deployConfig);
+        _setLegacyLockboxState(cts.systemConfig, cts.optimismPortal);
+        if (_enableFeatureBeforeUpgrade) {
+            vm.prank(cts.proxyAdmin.owner());
+            cts.systemConfig.setFeature(Features.ETH_LOCKBOX, true);
+        }
+        assertEq(cts.systemConfig.isCustomGasToken(), _useCustomGasToken);
+        vm.deal(address(cts.optimismPortal), 1 ether);
+
+        IOPContractsManagerV2.UpgradeInput memory input;
+        input.systemConfig = cts.systemConfig;
+        input.disputeGameConfigs = deployConfig.disputeGameConfigs;
+        address pao = cts.proxyAdmin.owner();
+
+        // Without the instruction, the upgrade must stop before changing any chain state.
+        prankDelegateCall(pao);
+        (bool success, bytes memory reason) =
+            address(opcmV2).delegatecall(abi.encodeCall(IOPContractsManagerV2.upgrade, (input)));
+        assertFalse(success);
+        // nosemgrep: sol-style-use-abi-encodecall
+        assertEq(
+            reason,
+            abi.encodeWithSelector(
+                IOPContractsManagerUtils.OPContractsManagerUtils_ProxyMustLoad.selector, "ETHLockbox"
+            )
+        );
+        assertEq(address(cts.optimismPortal.ethLockbox()), address(0));
+        assertEq(cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX), _enableFeatureBeforeUpgrade);
+        assertEq(address(cts.optimismPortal).balance, 1 ether);
+
+        input.extraInstructions = new IOPContractsManagerUtils.ExtraInstruction[](1);
+        input.extraInstructions[0] = IOPContractsManagerUtils.ExtraInstruction({
+            key: Constants.PERMITTED_PROXY_DEPLOYMENT_KEY, data: bytes("ETHLockbox")
+        });
+        prankDelegateCall(pao);
+        (success,) = address(opcmV2).delegatecall(abi.encodeCall(IOPContractsManagerV2.upgrade, (input)));
+        assertTrue(success, "upgrade failed");
+
+        IETHLockbox lockbox = cts.optimismPortal.ethLockbox();
+        assertNotEq(address(lockbox), address(0));
+        assertTrue(cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX));
+        assertFalse(cts.systemConfig.isFeatureEnabled(Features.INTEROP));
+        assertEq(cts.systemConfig.isCustomGasToken(), _useCustomGasToken);
+        assertTrue(lockbox.authorizedPortals(cts.optimismPortal));
+        assertEq(address(lockbox.superchainConfig()), address(cts.systemConfig.superchainConfig()));
+        assertEq(address(cts.anchorStateRegistry.ethLockbox()), address(lockbox));
+        assertEq(address(cts.delayedWETH.ethLockbox()), address(lockbox));
+        assertEq(address(cts.optimismPortal).balance, _useCustomGasToken ? 1 ether : 0);
+        assertEq(address(lockbox).balance, _useCustomGasToken ? 0 : 1 ether);
+
+        // Repeating the upgrade reuses the lockbox and does not migrate portal liquidity again.
+        vm.deal(address(cts.optimismPortal), 2 ether);
+        prankDelegateCall(pao);
+        (success,) = address(opcmV2).delegatecall(abi.encodeCall(IOPContractsManagerV2.upgrade, (input)));
+        assertTrue(success, "repeat upgrade failed");
+        assertEq(address(cts.optimismPortal.ethLockbox()), address(lockbox));
+        assertEq(cts.systemConfig.isCustomGasToken(), _useCustomGasToken);
+        assertEq(address(cts.optimismPortal).balance, 2 ether);
+        assertEq(address(lockbox).balance, _useCustomGasToken ? 0 : 1 ether);
+    }
+
+    /// @notice Tests that the deploy function succeeds and passes standard validation.
+    function test_deploy_succeeds() public {
+        // Run the deploy and standard validator checks.
+        // In standard mode, CANNON_KONA is disabled. In super root mode, SUPER_CANNON_KONA is disabled.
+        bool superRoot = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+        string memory expectedErrors = superRoot ? "SCKDG-SHAPE,SCKDG-10" : "CKDG-NOSHAPE,CKDG-10";
+        IOPContractsManagerV2.ChainContracts memory cts = runDeployV2(deployConfig, bytes(""), expectedErrors);
+
+        // Verify key contracts are deployed.
+        assertTrue(address(cts.systemConfig) != address(0), "systemConfig not deployed");
+        assertTrue(address(cts.proxyAdmin) != address(0), "proxyAdmin not deployed");
+        assertTrue(address(cts.optimismPortal) != address(0), "optimismPortal not deployed");
+        assertTrue(address(cts.ethLockbox) != address(0), "ethLockbox not deployed");
+        assertTrue(address(cts.disputeGameFactory) != address(0), "disputeGameFactory not deployed");
+        assertTrue(address(cts.anchorStateRegistry) != address(0), "anchorStateRegistry not deployed");
+        assertTrue(address(cts.delayedWETH) != address(0), "delayedWETH not deployed");
+
+        // Verify ownership is transferred to proxyAdminOwner.
+        assertEq(cts.proxyAdmin.owner(), deployConfig.proxyAdminOwner, "proxyAdmin owner mismatch");
+        assertEq(cts.disputeGameFactory.owner(), deployConfig.proxyAdminOwner, "disputeGameFactory owner mismatch");
+        assertTrue(cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX), "ETH_LOCKBOX not enabled");
+        assertEq(address(cts.optimismPortal.ethLockbox()), address(cts.ethLockbox), "portal lockbox mismatch");
+        assertEq(address(cts.anchorStateRegistry.ethLockbox()), address(cts.ethLockbox), "ASR ETHLockbox mismatch");
+        assertEq(address(cts.delayedWETH.ethLockbox()), address(cts.ethLockbox), "WETH ETHLockbox mismatch");
+    }
+
+    /// @notice Tests deploying a custom gas token chain. The ETHLockbox is enabled but the portal
+    ///         keeps custody of ETH.
+    function test_deploy_customGasToken_succeeds() public {
+        deployConfig.useCustomGasToken = true;
+
+        bool superRoot = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+        string memory expectedErrors = superRoot ? "SCKDG-SHAPE,SCKDG-10" : "CKDG-NOSHAPE,CKDG-10";
+        IOPContractsManagerV2.ChainContracts memory cts = runDeployV2(deployConfig, bytes(""), expectedErrors);
+
+        assertTrue(cts.systemConfig.isCustomGasToken(), "CGT not enabled");
+        assertTrue(cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX), "ETH_LOCKBOX not enabled");
+        assertEq(address(cts.optimismPortal.ethLockbox()), address(cts.ethLockbox), "portal lockbox mismatch");
+        assertEq(address(cts.anchorStateRegistry.ethLockbox()), address(cts.ethLockbox), "ASR ETHLockbox mismatch");
+        assertEq(address(cts.delayedWETH.ethLockbox()), address(cts.ethLockbox), "WETH ETHLockbox mismatch");
+
+        uint256 portalBalance = address(cts.optimismPortal).balance;
+        uint256 lockboxBalance = address(cts.ethLockbox).balance;
+        uint64 gasLimit = cts.optimismPortal.minimumGasLimit(0);
+        vm.deal(address(this), 1 ether);
+        vm.expectRevert(IOptimismPortal2.OptimismPortal_NotAllowedOnCGTMode.selector);
+        cts.optimismPortal.depositTransaction{ value: 1 ether }(address(this), 0, gasLimit, false, bytes(""));
+        assertEq(address(cts.optimismPortal).balance, portalBalance, "CGT portal ETH balance changed");
+        assertEq(address(cts.ethLockbox).balance, lockboxBalance, "CGT lockbox received ETH");
+
+        vm.prank(superchainConfig.guardian());
+        superchainConfig.pause(address(cts.ethLockbox));
+        assertTrue(cts.ethLockbox.paused(), "lockbox not paused");
+        assertTrue(cts.systemConfig.paused(), "SystemConfig not paused");
+        assertTrue(cts.optimismPortal.paused(), "portal not paused");
+        assertTrue(cts.anchorStateRegistry.paused(), "ASR not paused");
+    }
+
+    /// @notice Tests that deploy stores the per-chain withdrawal delays in proxy storage.
+    function test_deploy_setsWithdrawalDelays_succeeds() public {
+        deployConfig.proofMaturityDelaySeconds = 2 days;
+        deployConfig.disputeGameFinalityDelaySeconds = 1 days;
+        deployConfig.withdrawalDelaySeconds = 1 days;
+
+        bool superRoot = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+        string memory expectedErrors = superRoot ? "SCKDG-SHAPE,SCKDG-10" : "CKDG-NOSHAPE,CKDG-10";
+        IOPContractsManagerV2.ChainContracts memory cts = runDeployV2(deployConfig, bytes(""), expectedErrors);
+
+        assertEq(cts.optimismPortal.proofMaturityDelaySeconds(), 2 days, "proof maturity delay mismatch");
+        assertEq(cts.anchorStateRegistry.disputeGameFinalityDelaySeconds(), 1 days, "finality delay mismatch");
+        assertEq(cts.delayedWETH.delay(), 1 days, "withdrawal delay mismatch");
+
+        // The values live in the proxies (portal slot 64, registry slot 7, DelayedWETH slot 6), not
+        // in the implementations.
+        assertEq(uint256(vm.load(address(cts.optimismPortal), bytes32(uint256(64)))), 2 days);
+        assertEq(uint256(vm.load(address(cts.anchorStateRegistry), bytes32(uint256(7)))), 1 days);
+        assertEq(uint256(vm.load(address(cts.delayedWETH), bytes32(uint256(6)))), 1 days);
+        IOPContractsManagerContainer.Implementations memory impls = opcmV2.implementations();
+        assertEq(IOptimismPortal2(payable(impls.optimismPortalImpl)).proofMaturityDelaySeconds(), 0);
+        assertEq(IAnchorStateRegistry(impls.anchorStateRegistryImpl).disputeGameFinalityDelaySeconds(), 0);
+        assertEq(IDelayedWETH(payable(impls.delayedWETHImpl)).delay(), 0);
+    }
+
+    /// @notice Tests that a zero withdrawal delay is rejected by OPCM's config validation before
+    ///         any proxy is touched.
+    function test_deploy_zeroWithdrawalDelay_reverts() public {
+        deployConfig.withdrawalDelaySeconds = 0;
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidDelayConfig.selector)
+        );
+    }
+
+    /// @notice Tests that the DelayedWETH bounds reject an out-of-range withdrawal delay on deploy.
+    ///         The bounds error is raised inside initialize(), which the Proxy wraps in its own
+    ///         delegatecall failure message.
+    function test_deploy_withdrawalDelayOutOfBounds_reverts() public {
+        IOPContractsManagerContainer.Implementations memory impls = opcmV2.implementations();
+        deployConfig.withdrawalDelaySeconds = IDelayedWETH(payable(impls.delayedWETHImpl)).maxDelay() + 1;
+        runDeployV2(deployConfig, bytes("Proxy: delegatecall to new implementation contract failed"));
+    }
+
+    /// @notice Tests that a zero proof maturity delay is rejected by OPCM's config validation
+    ///         before any proxy is touched.
+    function test_deploy_zeroProofMaturityDelay_reverts() public {
+        deployConfig.proofMaturityDelaySeconds = 0;
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidDelayConfig.selector)
+        );
+    }
+
+    /// @notice Tests that a zero dispute game finality delay is rejected by OPCM's config
+    ///         validation before any proxy is touched.
+    function test_deploy_zeroDisputeGameFinalityDelay_reverts() public {
+        deployConfig.disputeGameFinalityDelaySeconds = 0;
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidDelayConfig.selector)
+        );
+    }
+
+    /// @notice Tests that the portal's bounds reject an out-of-range proof maturity delay on deploy.
+    ///         The bounds error is raised inside initialize(), which the Proxy wraps in its own
+    ///         delegatecall failure message.
+    function test_deploy_proofMaturityDelayOutOfBounds_reverts() public {
+        IOPContractsManagerContainer.Implementations memory impls = opcmV2.implementations();
+        deployConfig.proofMaturityDelaySeconds =
+            IOptimismPortal2(payable(impls.optimismPortalImpl)).maxProofMaturityDelaySeconds() + 1;
+        runDeployV2(deployConfig, bytes("Proxy: delegatecall to new implementation contract failed"));
+    }
+
+    /// @notice Tests that the registry's bounds reject an out-of-range finality delay on deploy.
+    ///         The bounds error is raised inside initialize(), which the Proxy wraps in its own
+    ///         delegatecall failure message.
+    function test_deploy_disputeGameFinalityDelayOutOfBounds_reverts() public {
+        IOPContractsManagerContainer.Implementations memory impls = opcmV2.implementations();
+        deployConfig.disputeGameFinalityDelaySeconds =
+            IAnchorStateRegistry(impls.anchorStateRegistryImpl).maxDisputeGameFinalityDelaySeconds() + 1;
+        runDeployV2(deployConfig, bytes("Proxy: delegatecall to new implementation contract failed"));
+    }
+
+    /// @notice Tests that deploy reverts when the superchainConfig needs upgrade.
+    function test_deploy_superchainConfigNeedsUpgrade_reverts() public {
+        // Force the SuperchainConfig to return an obviously outdated version.
+        vm.mockCall(address(superchainConfig), abi.encodeCall(ISuperchainConfig.version, ()), abi.encode("0.0.0"));
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig,
+            abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_SuperchainConfigNeedsUpgrade.selector)
+        );
+    }
+
+    /// @notice Tests that deploy reverts when missing game configs.
+    function test_deploy_missingGameConfigs_reverts() public {
+        // Delete the Cannon Kona game configuration.
+        delete deployConfig.disputeGameConfigs[2];
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that enabling the ZK game during initial deployment reverts.
+    function test_deploy_enableZKGame_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        deployConfig.disputeGameConfigs[5].enabled = true;
+        deployConfig.disputeGameConfigs[5].initBond = 1 ether;
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that deploy reverts when game configs are in wrong order.
+    function test_deploy_wrongGameConfigOrder_reverts() public {
+        // Swap the game config order.
+        IOPContractsManagerUtils.DisputeGameConfig memory temp = deployConfig.disputeGameConfigs[0];
+        deployConfig.disputeGameConfigs[0] = deployConfig.disputeGameConfigs[1];
+        deployConfig.disputeGameConfigs[1] = temp;
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that deploy reverts when a disabled game has non-zero init bond.
+    function test_deploy_disabledGameNonZeroBond_reverts() public {
+        // Disable Cannon but keep a non-zero init bond.
+        deployConfig.disputeGameConfigs[0].enabled = false;
+        deployConfig.disputeGameConfigs[0].initBond = 1 ether;
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that deploy reverts when an enabled game has a zero init bond.
+    function test_deploy_enabledGameZeroBond_reverts() public {
+        // Enable CANNON_KONA but keep a zero init bond.
+        deployConfig.disputeGameConfigs[2].enabled = true;
+        deployConfig.disputeGameConfigs[2].initBond = 0;
+        deployConfig.disputeGameConfigs[2].gameArgs =
+            abi.encode(IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: cannonKonaPrestate }));
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that two different senders deploying with the same saltMixer and l2ChainId
+    ///         get different contract addresses.
+    function test_deploy_differentSendersDifferentAddresses_succeeds() public {
+        address senderA = makeAddr("senderA");
+        address senderB = makeAddr("senderB");
+
+        vm.prank(senderA);
+        IOPContractsManagerV2.ChainContracts memory ctsA = opcmV2.deploy(deployConfig);
+
+        vm.prank(senderB);
+        IOPContractsManagerV2.ChainContracts memory ctsB = opcmV2.deploy(deployConfig);
+
+        assertNotEq(
+            address(ctsA.systemConfig), address(ctsB.systemConfig), "systemConfig addresses should differ by sender"
+        );
+    }
+
+    /// @notice Tests that deploy reverts when startingRespectedGameType is not in the disputeGameConfigs.
+    function test_deploy_startingGameTypeNotInConfigs_reverts() public {
+        deployConfig.startingRespectedGameType = GameTypes.SUPER_CANNON;
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that deploy reverts when startingRespectedGameType is a disabled game type.
+    function test_deploy_startingGameTypeDisabled_reverts() public {
+        deployConfig.startingRespectedGameType = GameTypes.CANNON;
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Deploy reverts when legacy CANNON is enabled, even with a valid prestate.
+    function test_deploy_cannonGameEnabled_reverts() public {
+        deployConfig.disputeGameConfigs[0].enabled = true;
+        deployConfig.disputeGameConfigs[0].initBond = DEFAULT_DISPUTE_GAME_INIT_BOND;
+        deployConfig.disputeGameConfigs[0].gameArgs =
+            abi.encode(IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: cannonPrestate }));
+        deployConfig.startingRespectedGameType = GameTypes.CANNON;
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Deploy reverts when a normal-root game is enabled in super-root mode.
+    function test_deploy_normalGameInSuperMode_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        _disableSuperPermissionedGame();
+        _enablePermissionedCannonGame();
+        deployConfig.startingRespectedGameType = GameTypes.PERMISSIONED_CANNON;
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Deploy reverts when a super-root game is enabled in normal-root mode.
+    function test_deploy_superGameInNormalMode_reverts() public {
+        skipIfDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        _disablePermissionedCannonGame();
+        _enableSuperPermissionedGame();
+        deployConfig.startingRespectedGameType = GameTypes.SUPER_PERMISSIONED;
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Deploy rejects CANNON_KONA in super-root mode with an otherwise valid config.
+    function test_deploy_cannonKonaInSuperMode_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        _enableCannonKonaGame();
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Deploy rejects SUPER_CANNON_KONA in normal-root mode with an otherwise valid config.
+    function test_deploy_superCannonKonaInNormalMode_reverts() public {
+        skipIfDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        _enableSuperCannonKonaGame();
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice CANNON_KONA may be enabled at initial deployment now that its prestate is supplied via
+    ///         the deploy config.
+    function test_deploy_cannonKonaGameEnabled_succeeds() public {
+        skipIfDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        _disablePermissionedCannonGame();
+        _enableCannonKonaGame();
+        deployConfig.startingRespectedGameType = GameTypes.CANNON_KONA;
+
+        IOPContractsManagerV2.ChainContracts memory cts = opcmV2.deploy(deployConfig);
+        assertEq(
+            address(cts.disputeGameFactory.gameImpls(GameTypes.CANNON_KONA)),
+            opcmV2.implementations().faultDisputeGameImpl,
+            "CANNON_KONA impl mismatch"
+        );
+        assertEq(
+            address(cts.disputeGameFactory.gameImpls(GameTypes.PERMISSIONED_CANNON)),
+            address(0),
+            "PERMISSIONED_CANNON should be absent"
+        );
+        assertEq(
+            cts.anchorStateRegistry.respectedGameType().raw(),
+            GameTypes.CANNON_KONA.raw(),
+            "respected game type mismatch"
+        );
+    }
+
+    /// @notice Deploy reverts when legacy CANNON is enabled alongside CANNON_KONA.
+    function test_deploy_multiplePermissionlessGamesEnabled_reverts() public {
+        skipIfDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        deployConfig.disputeGameConfigs[0].enabled = true;
+        deployConfig.disputeGameConfigs[0].initBond = DEFAULT_DISPUTE_GAME_INIT_BOND;
+        deployConfig.disputeGameConfigs[0].gameArgs =
+            abi.encode(IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: cannonPrestate }));
+        deployConfig.disputeGameConfigs[2].enabled = true;
+        deployConfig.disputeGameConfigs[2].initBond = DEFAULT_DISPUTE_GAME_INIT_BOND;
+        deployConfig.disputeGameConfigs[2].gameArgs =
+            abi.encode(IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: cannonKonaPrestate }));
+        deployConfig.startingRespectedGameType = GameTypes.CANNON_KONA;
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Deploy reverts when CANNON_KONA is enabled with a zero prestate.
+    function test_deploy_cannonKonaGameEnabledZeroPrestate_reverts() public {
+        skipIfDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        _enableCannonKonaGame();
+        deployConfig.disputeGameConfigs[2].gameArgs =
+            abi.encode(IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: Claim.wrap(bytes32(0)) }));
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Deploy reverts when an initial deployment uses a zero starting anchor root.
+    function test_deploy_zeroStartingAnchorRoot_reverts() public {
+        deployConfig.startingAnchorRoot = Proposal({ root: Hash.wrap(bytes32(0)), l2SequenceNumber: 0 });
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Deploy reverts when an initial anchor cannot have a uint64 successor.
+    function test_deploy_maxStartingAnchorRootSequenceNumber_reverts() public {
+        deployConfig.startingAnchorRoot.l2SequenceNumber = type(uint64).max;
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Deploy reverts when an initial permissionless deploy uses a zero starting anchor root.
+    function test_deploy_permissionlessZeroStartingAnchorRoot_reverts() public {
+        skipIfDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        _enableCannonKonaGame();
+        deployConfig.startingRespectedGameType = GameTypes.CANNON_KONA;
+        deployConfig.startingAnchorRoot = Proposal({ root: Hash.wrap(bytes32(0)), l2SequenceNumber: 0 });
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Deploy reverts when an initial permissionless deploy uses the permissioned placeholder anchor root.
+    function test_deploy_permissionlessPlaceholderStartingAnchorRoot_reverts() public {
+        skipIfDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        _enableCannonKonaGame();
+        deployConfig.startingRespectedGameType = GameTypes.CANNON_KONA;
+        deployConfig.startingAnchorRoot =
+            Proposal({ root: Hash.wrap(Constants.PLACEHOLDER_STARTING_ANCHOR_ROOT), l2SequenceNumber: 0 });
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice SUPER_CANNON_KONA may be the only enabled initial game in super-root mode.
+    function test_deploy_superCannonKonaGameEnabled_succeeds() public {
+        skipIfDevFeatureDisabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        _disableSuperPermissionedGame();
+        _enableSuperCannonKonaGame();
+        deployConfig.startingRespectedGameType = GameTypes.SUPER_CANNON_KONA;
+
+        IOPContractsManagerV2.ChainContracts memory cts = opcmV2.deploy(deployConfig);
+        assertEq(
+            address(cts.disputeGameFactory.gameImpls(GameTypes.SUPER_CANNON_KONA)),
+            opcmV2.implementations().superFaultDisputeGameImpl,
+            "SUPER_CANNON_KONA impl mismatch"
+        );
+        assertEq(
+            cts.anchorStateRegistry.respectedGameType().raw(),
+            GameTypes.SUPER_CANNON_KONA.raw(),
+            "respected game type mismatch"
+        );
+        assertEq(
+            address(cts.disputeGameFactory.gameImpls(GameTypes.SUPER_PERMISSIONED)),
+            address(0),
+            "SUPER_PERMISSIONED should be absent"
+        );
+    }
+
+    /// @notice The 0xdead placeholder anchor remains allowed for initial permissioned deployments.
+    function test_deploy_permissionedPlaceholderStartingAnchorRoot_succeeds() public {
+        deployConfig.startingAnchorRoot =
+            Proposal({ root: Hash.wrap(Constants.PLACEHOLDER_STARTING_ANCHOR_ROOT), l2SequenceNumber: 0 });
+        bool superRoot = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+        string memory expectedErrors = superRoot ? "SCKDG-SHAPE,SCKDG-10" : "CKDG-NOSHAPE,CKDG-10";
+        IOPContractsManagerV2.ChainContracts memory cts = runDeployV2(deployConfig, bytes(""), expectedErrors);
+        Proposal memory startingAnchorRoot = cts.anchorStateRegistry.getStartingAnchorRoot();
+        assertEq(
+            startingAnchorRoot.root.raw(), Constants.PLACEHOLDER_STARTING_ANCHOR_ROOT, "starting anchor root mismatch"
+        );
+    }
+
+    /// @notice CANNON_KONA as respected game type reverts because its dispute game is not enabled
+    ///         during initial deployment.
+    function test_deploy_cannonKonaRespectedGameType_reverts() public {
+        skipIfDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        deployConfig.startingRespectedGameType = GameTypes.CANNON_KONA;
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Deploy reverts when SUPER_CANNON_KONA has a zero prestate.
+    function test_deploy_superCannonKonaZeroPrestate_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        _enableSuperCannonKonaGame();
+        deployConfig.disputeGameConfigs[4].gameArgs =
+            abi.encode(IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: Claim.wrap(bytes32(0)) }));
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Deploy reverts when SUPER_CANNON_KONA uses the permissioned placeholder anchor root.
+    function test_deploy_superCannonKonaPlaceholderStartingAnchorRoot_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        _enableSuperCannonKonaGame();
+        deployConfig.startingRespectedGameType = GameTypes.SUPER_CANNON_KONA;
+        deployConfig.startingAnchorRoot =
+            Proposal({ root: Hash.wrap(Constants.PLACEHOLDER_STARTING_ANCHOR_ROOT), l2SequenceNumber: 0 });
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice An invalid game type reverts.
+    function test_deploy_invalidRespectedGameType_reverts() public {
+        deployConfig.startingRespectedGameType = GameType.wrap(255);
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(
+            deployConfig, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector)
+        );
+    }
+
+    /// @notice Tests that malformed SUPER_ game configs are rejected on initial deploy.
+    function test_deploy_superRootMigrationInitialDeploy_reverts() public {
+        skipIfNotForkTest("FeatSuperRootMigration: only runs in forked tests");
+        skipIfDevFeatureDisabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        // The deploy path validates game configs. Providing the wrong number of
+        // configs (1 instead of required 6) triggers InvalidGameConfigs.
+        IOPContractsManagerV2.FullConfig memory cfg;
+        cfg.l2ChainId = 999999;
+        cfg.proxyAdminOwner = makeAddr("owner");
+        cfg.systemConfigOwner = makeAddr("sysOwner");
+        cfg.batcher = makeAddr("batcher");
+        cfg.unsafeBlockSigner = makeAddr("signer");
+        cfg.basefeeScalar = 1;
+        cfg.blobBasefeeScalar = 1;
+        cfg.gasLimit = 30_000_000;
+        cfg.startingAnchorRoot = Proposal({ root: Hash.wrap(bytes32(uint256(1))), l2SequenceNumber: 0 });
+        cfg.startingRespectedGameType = GameTypes.SUPER_CANNON_KONA;
+
+        // Provide only 1 config (requires exactly 6).
+        cfg.disputeGameConfigs = new IOPContractsManagerUtils.DisputeGameConfig[](1);
+        cfg.disputeGameConfigs[0] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: true,
+            initBond: 0.08 ether,
+            gameType: GameTypes.SUPER_CANNON_KONA,
+            gameArgs: abi.encode(
+                IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: cannonKonaPrestate })
+            )
+        });
+
+        // nosemgrep: sol-style-use-abi-encodecall
+        runDeployV2(cfg, abi.encodeWithSelector(IOPContractsManagerV2.OPContractsManagerV2_InvalidGameConfigs.selector));
+    }
+}
+
+/// @title OPContractsManagerV2_DevFeatureBitmap_Test
+/// @notice Tests OPContractsManagerV2.devFeatureBitmap
+contract OPContractsManagerV2_DevFeatureBitmap_Test is OPContractsManagerV2_TestInit {
+    /// @notice Tests that the devFeatureBitmap returned by opcmV2 matches the contractsContainer address's own.
+    function test_devFeatureBitmap_succeeds() public view {
+        assertEq(
+            opcmV2.devFeatureBitmap(),
+            opcmV2.contractsContainer().devFeatureBitmap(),
+            "devFeatureBitmap on opcmV2 does not match contractsContainer bitmap"
+        );
+    }
+}
+
+/// @title OPContractsManagerV2_Migrate_Test
+/// @notice Tests the `migrate` function of the `OPContractsManagerV2` contract.
+contract OPContractsManagerV2_Migrate_Test is OPContractsManagerV2_TestInit {
+    /// @notice Buffer percentage (relative to EIP-7825 gas limit) allowed for migrations.
+    uint256 public constant MIGRATE_GAS_BUFFER_PERCENTAGE = 50; // 50%
+
+    /// @notice Deployed chain contracts for chain 1.
+    IOPContractsManagerV2.ChainContracts chainContracts1;
+
+    /// @notice Deployed chain contracts for chain 2.
+    IOPContractsManagerV2.ChainContracts chainContracts2;
+
+    /// @notice Super root prestate for super cannon games.
+    Claim superPrestate = Claim.wrap(bytes32(keccak256("superPrestate")));
+
+    /// @notice Function requires interop portal.
+    function setUp() public override {
+        super.setUp();
+        skipIfDevFeatureDisabled(DevFeatures.OPTIMISM_PORTAL_INTEROP);
+
+        // Deploy two chains via OPCMv2 for migration testing.
+        chainContracts1 = _deployChainForMigration(1000001);
+        chainContracts2 = _deployChainForMigration(1000002);
+    }
+
+    /// @notice Helper function to deploy a chain for migration testing.
+    /// @param _l2ChainId The L2 chain ID for the deployed chain.
+    /// @return cts_ The deployed chain contracts.
+    function _deployChainForMigration(uint256 _l2ChainId)
+        internal
+        returns (IOPContractsManagerV2.ChainContracts memory cts_)
+    {
+        // Set up dispute game configs first since they're needed for the struct literal.
+        bool superRoot = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+        address initialChallenger = _initialPermissionedGameChallenger();
+        address initialProposer = _initialPermissionedGameProposer();
+        IOPContractsManagerUtils.DisputeGameConfig[] memory dgConfigs =
+            new IOPContractsManagerUtils.DisputeGameConfig[](6);
+        dgConfigs[0] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.CANNON, gameArgs: bytes("")
+        });
+        dgConfigs[1] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: !superRoot,
+            initBond: superRoot ? 0 : 0.08 ether,
+            gameType: GameTypes.PERMISSIONED_CANNON,
+            gameArgs: superRoot
+                ? bytes("")
+                : abi.encode(
+                    IOPContractsManagerUtils.PermissionedDisputeGameConfig({
+                        absolutePrestate: cannonPrestate, proposer: initialProposer, challenger: initialChallenger
+                    })
+                )
+        });
+        dgConfigs[2] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.CANNON_KONA, gameArgs: bytes("")
+        });
+        dgConfigs[3] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: superRoot,
+            initBond: 0,
+            gameType: GameTypes.SUPER_PERMISSIONED,
+            gameArgs: superRoot
+                ? abi.encode(IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig({ proposer: initialProposer }))
+                : bytes("")
+        });
+        dgConfigs[4] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.SUPER_CANNON_KONA, gameArgs: bytes("")
+        });
+        dgConfigs[5] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false,
+            initBond: 0,
+            gameType: GameTypes.ZK_DISPUTE_GAME,
+            gameArgs: abi.encode(
+                IOPContractsManagerUtils.ZKDisputeGameConfig({
+                    absolutePrestate: Claim.wrap(bytes32(0)),
+                    maxChallengeDuration: Duration.wrap(0),
+                    maxProveDuration: Duration.wrap(0),
+                    challengerBond: 0
+                })
+            )
+        });
+
+        // Set up the deploy config using struct literal for compile-time field checking.
+        IOPContractsManagerV2.FullConfig memory deployConfig = IOPContractsManagerV2.FullConfig({
+            saltMixer: string(abi.encodePacked("migrate-test-", _l2ChainId)),
+            superchainConfig: superchainConfig,
+            proxyAdminOwner: makeAddr("migrateProxyAdminOwner"),
+            systemConfigOwner: makeAddr("migrateSystemConfigOwner"),
+            unsafeBlockSigner: makeAddr("migrateUnsafeBlockSigner"),
+            batcher: makeAddr("migrateBatcher"),
+            startingAnchorRoot: Proposal({ root: Hash.wrap(bytes32(hex"1234")), l2SequenceNumber: 123 }),
+            startingRespectedGameType: superRoot ? GameTypes.SUPER_PERMISSIONED : GameTypes.PERMISSIONED_CANNON,
+            basefeeScalar: 1368,
+            blobBasefeeScalar: 801949,
+            gasLimit: 60_000_000,
+            l2ChainId: _l2ChainId,
+            resourceConfig: IResourceMetering.ResourceConfig({
+                maxResourceLimit: 20_000_000,
+                elasticityMultiplier: 10,
+                baseFeeMaxChangeDenominator: 8,
+                minimumBaseFee: 1 gwei,
+                systemTxMaxGas: 1_000_000,
+                maximumBaseFee: type(uint128).max
+            }),
+            disputeGameConfigs: dgConfigs,
+            useCustomGasToken: false,
+            proofMaturityDelaySeconds: 604800,
+            disputeGameFinalityDelaySeconds: 302400,
+            withdrawalDelaySeconds: 302400
+        });
+
+        // Deploy the chain.
+        cts_ = opcmV2.deploy(deployConfig);
+    }
+
+    function _initialPermissionedGameChallenger() internal view returns (address challenger_) {
+        challenger_ = DisputeGames.permissionedGameChallenger(disputeGameFactory);
+    }
+
+    function _initialPermissionedGameProposer() internal view returns (address proposer_) {
+        proposer_ = DisputeGames.permissionedGameProposer(disputeGameFactory);
+    }
+
+    /// @notice Helper function to create the default migration input.
+    /// @return input_ The default migration input.
+    function _getDefaultMigrateInput() internal returns (IOPContractsManagerMigrator.MigrateInput memory input_) {
+        // Set up the chain system configs.
+        ISystemConfig[] memory chainSystemConfigs = new ISystemConfig[](2);
+        chainSystemConfigs[0] = chainContracts1.systemConfig;
+        chainSystemConfigs[1] = chainContracts2.systemConfig;
+
+        // Set up the dispute game configs for super root games.
+        address proposer = makeAddr("superProposer");
+
+        IOPContractsManagerUtils.DisputeGameConfig[] memory disputeGameConfigs =
+            new IOPContractsManagerUtils.DisputeGameConfig[](1);
+        disputeGameConfigs[0] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: true,
+            initBond: 0,
+            gameType: GameTypes.SUPER_PERMISSIONED,
+            gameArgs: abi.encode(IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig({ proposer: proposer }))
+        });
+
+        input_ = IOPContractsManagerMigrator.MigrateInput({
+            chainSystemConfigs: chainSystemConfigs,
+            disputeGameConfigs: disputeGameConfigs,
+            startingAnchorRoot: Proposal({ root: Hash.wrap(bytes32(hex"ABBA")), l2SequenceNumber: 1234 }),
+            startingRespectedGameType: GameTypes.SUPER_PERMISSIONED
+        });
+    }
+
+    /// @notice Helper function to append a dispute game config to a migrate input.
+    /// @param _input The migrate input to append to.
+    /// @param _gameConfig The dispute game config to append.
+    function _appendDisputeGameConfig(
+        IOPContractsManagerMigrator.MigrateInput memory _input,
+        IOPContractsManagerUtils.DisputeGameConfig memory _gameConfig
+    )
+        internal
+        pure
+    {
+        IOPContractsManagerUtils.DisputeGameConfig[] memory existing = _input.disputeGameConfigs;
+        IOPContractsManagerUtils.DisputeGameConfig[] memory updated =
+            new IOPContractsManagerUtils.DisputeGameConfig[](existing.length + 1);
+        for (uint256 i = 0; i < existing.length; i++) {
+            updated[i] = existing[i];
+        }
+        updated[existing.length] = _gameConfig;
+        _input.disputeGameConfigs = updated;
+    }
+
+    /// @notice Helper function to build a SUPER_CANNON_KONA dispute game config. SUPER_CANNON_KONA
+    ///         is a permissionless super-root FDG, so its game args are the single absolute
+    ///         prestate.
+    /// @param _initBond The init bond for the game.
+    /// @param _absolutePrestate The absolute prestate for the game.
+    /// @return config_ The dispute game config.
+    function _superCannonKonaConfig(
+        uint256 _initBond,
+        Claim _absolutePrestate
+    )
+        internal
+        pure
+        returns (IOPContractsManagerUtils.DisputeGameConfig memory config_)
+    {
+        config_ = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: true,
+            initBond: _initBond,
+            gameType: GameTypes.SUPER_CANNON_KONA,
+            gameArgs: abi.encode(
+                IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: _absolutePrestate })
+            )
+        });
+    }
+
+    /// @notice Helper function to build a ZK_DISPUTE_GAME dispute game config. ZK_DISPUTE_GAME is
+    ///         a permissionless super-root game, so its absolute prestate is the verification key.
+    /// @param _initBond The init bond for the game.
+    /// @param _absolutePrestate The absolute prestate for the game.
+    /// @return config_ The dispute game config.
+    function _zkDisputeGameConfig(
+        uint256 _initBond,
+        Claim _absolutePrestate
+    )
+        internal
+        pure
+        returns (IOPContractsManagerUtils.DisputeGameConfig memory config_)
+    {
+        config_ = _zkDisputeGameConfig(_initBond, _absolutePrestate, uint64(7 days), uint64(3 days), 1 ether);
+    }
+
+    /// @notice Helper function to build a ZK_DISPUTE_GAME dispute game config with explicit
+    ///         challenge parameters.
+    /// @param _initBond The init bond for the game.
+    /// @param _absolutePrestate The absolute prestate for the game.
+    /// @param _maxChallengeDuration The maximum challenge duration for the game.
+    /// @param _maxProveDuration The maximum prove duration for the game.
+    /// @param _challengerBond The challenger bond for the game.
+    /// @return config_ The dispute game config.
+    function _zkDisputeGameConfig(
+        uint256 _initBond,
+        Claim _absolutePrestate,
+        uint64 _maxChallengeDuration,
+        uint64 _maxProveDuration,
+        uint256 _challengerBond
+    )
+        internal
+        pure
+        returns (IOPContractsManagerUtils.DisputeGameConfig memory config_)
+    {
+        config_ = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: true,
+            initBond: _initBond,
+            gameType: GameTypes.ZK_DISPUTE_GAME,
+            gameArgs: abi.encode(
+                IOPContractsManagerUtils.ZKDisputeGameConfig({
+                    absolutePrestate: _absolutePrestate,
+                    maxChallengeDuration: Duration.wrap(_maxChallengeDuration),
+                    maxProveDuration: Duration.wrap(_maxProveDuration),
+                    challengerBond: _challengerBond
+                })
+            )
+        });
+    }
+
+    /// @notice Helper function to execute a migration.
+    /// @param _input The input to the migration function.
+    function _doMigration(IOPContractsManagerMigrator.MigrateInput memory _input) internal {
+        _doMigration(_input, bytes4(0));
+    }
+
+    /// @notice Helper function to execute a migration, asserting the revert selector when one is
+    ///         given. Reports separately whether migrate unexpectedly succeeded or reverted with a
+    ///         different error.
+    /// @param _input The input to the migration function.
+    /// @param _revertSelector The selector of the revert to expect, or bytes4(0) to expect success.
+    function _doMigration(IOPContractsManagerMigrator.MigrateInput memory _input, bytes4 _revertSelector) internal {
+        // Set the proxy admin owner to be a delegate caller.
+        address proxyAdminOwner = chainContracts1.proxyAdmin.owner();
+
+        if (_revertSelector != bytes4(0)) {
+            prankDelegateCall(proxyAdminOwner);
+            (bool succeeded, bytes memory returnData) =
+                address(opcmV2).delegatecall(abi.encodeCall(IOPContractsManagerV2.migrate, (_input)));
+            assertFalse(succeeded, "expected migrate to revert, but it succeeded");
+            assertEq(bytes4(returnData), _revertSelector, "migrate reverted with an unexpected selector");
+            return;
+        }
+
+        // Execute a delegatecall to the OPCM migration function.
+        // Check gas usage of the migration function.
+        uint256 gasBefore = gasleft();
+        prankDelegateCall(proxyAdminOwner);
+        (bool success,) = address(opcmV2).delegatecall(abi.encodeCall(IOPContractsManagerV2.migrate, (_input)));
+        assertTrue(success, "migrate failed");
+        uint256 gasAfter = gasleft();
+
+        // Make sure we can fit in a block
+        uint256 fusakaLimit = 2 ** 24;
+        assertLt(gasBefore - gasAfter, fusakaLimit * MIGRATE_GAS_BUFFER_PERCENTAGE / 100, "Gas usage too high");
+    }
+
+    /// @notice Helper function to enable a chain's existing per-chain ETHLockbox before migration.
+    /// @param _cts The chain contracts to update.
+    function _enableEthLockbox(IOPContractsManagerV2.ChainContracts memory _cts) internal {
+        if (!_cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX)) {
+            vm.prank(address(_cts.proxyAdmin));
+            _cts.systemConfig.setFeature(Features.ETH_LOCKBOX, true);
+        }
+
+        StorageSlot memory slot = ForgeArtifacts.getSlot("OptimismPortal2", "ethLockbox");
+        vm.store(address(_cts.optimismPortal), bytes32(slot.slot), bytes32(uint256(uint160(address(_cts.ethLockbox)))));
+    }
+
+    /// @notice Helper function to enable both test chains' per-chain ETHLockboxes before migration.
+    function _enableEthLockboxes() internal {
+        _enableEthLockbox(chainContracts1);
+        _enableEthLockbox(chainContracts2);
+    }
+
+    /// @notice Helper function to assert that the old game implementations are now zeroed out.
+    /// @param _disputeGameFactory The dispute game factory to check.
+    function _assertOldGamesZeroed(IDisputeGameFactory _disputeGameFactory) internal view {
+        // Assert that the old game implementations are now zeroed out.
+        _assertGameIsEmpty(_disputeGameFactory, GameTypes.CANNON, "CANNON");
+        _assertGameIsEmpty(_disputeGameFactory, GameTypes.SUPER_CANNON, "SUPER_CANNON");
+        _assertGameIsEmpty(_disputeGameFactory, GameTypes.PERMISSIONED_CANNON, "PERMISSIONED_CANNON");
+        _assertGameIsEmpty(_disputeGameFactory, GameTypes.SUPER_PERMISSIONED, "SUPER_PERMISSIONED");
+        _assertGameIsEmpty(_disputeGameFactory, GameTypes.CANNON_KONA, "CANNON_KONA");
+        _assertGameIsEmpty(_disputeGameFactory, GameTypes.SUPER_CANNON_KONA, "SUPER_CANNON_KONA");
+        _assertGameIsEmpty(_disputeGameFactory, GameTypes.ZK_DISPUTE_GAME, "ZK_DISPUTE_GAME");
+    }
+
+    /// @notice Helper function to assert a game is empty.
+    /// @param _dgf The dispute game factory.
+    /// @param _gameType The game type.
+    /// @param _label The label for the game type.
+    function _assertGameIsEmpty(IDisputeGameFactory _dgf, GameType _gameType, string memory _label) internal view {
+        assertEq(
+            address(_dgf.gameImpls(_gameType)),
+            address(0),
+            string.concat("Game type set when it should not be: ", _label)
+        );
+        assertEq(_dgf.gameArgs(_gameType), hex"", string.concat("Game args should be empty: ", _label));
+    }
+
+    /// @notice Seeds every cleared game type on a pre-migration factory with a non-zero
+    ///         implementation and non-empty args, so the post-migration clearing assertions have
+    ///         something to clear.
+    /// @param _dgf The chain's pre-migration DisputeGameFactory.
+    function _seedClearedGameTypes(IDisputeGameFactory _dgf) internal {
+        GameType[] memory gameTypes = GameTypes.clearedGameTypes();
+        address dgfOwner = _dgf.owner();
+        for (uint256 i = 0; i < gameTypes.length; i++) {
+            vm.prank(dgfOwner);
+            _dgf.setImplementation(gameTypes[i], IDisputeGame(address(0xdead)), hex"01");
+            assertNotEq(address(_dgf.gameImpls(gameTypes[i])), address(0), "seed did nothing");
+        }
+    }
+
+    /// @notice Tests that the migrate function reverts when not delegatecalled.
+    function test_migrate_notDelegateCalled_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        vm.expectRevert(IOPContractsManagerV2.OPContractsManagerV2_OnlyDelegateCall.selector);
+        opcmV2.migrate(input);
+    }
+
+    /// @notice Tests that migrate reverts when the starting anchor root is zero.
+    function test_migrate_zeroStartingAnchorRoot_reverts() public {
+        _enableEthLockboxes();
+
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        input.startingAnchorRoot.root = Hash.wrap(bytes32(0));
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidStartingAnchorRoot.selector);
+    }
+
+    /// @notice Tests that migrate reverts when the starting anchor root leaves no room for a
+    ///         successor.
+    function test_migrate_startingAnchorRootSequenceTooLarge_reverts() public {
+        _enableEthLockboxes();
+
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        input.startingAnchorRoot.l2SequenceNumber = type(uint64).max;
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidStartingAnchorRoot.selector);
+    }
+
+    function test_migrate_maxValidStartingAnchorRootSequence_succeeds() public {
+        _enableEthLockboxes();
+
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        input.startingAnchorRoot.l2SequenceNumber = uint256(type(uint64).max) - 1;
+
+        _doMigration(input);
+
+        IOptimismPortal2 portal1 = IOptimismPortal2(payable(chainContracts1.systemConfig.optimismPortal()));
+        (, uint256 anchorSeq) = portal1.anchorStateRegistry().getAnchorRoot();
+        assertEq(anchorSeq, uint256(type(uint64).max) - 1, "starting anchor sequence number mismatch");
+    }
+
+    /// @notice Tests that upgrade re-points the shared dispute games of a migrated interop set.
+    ///         The shared contracts are reachable from every chain in the set, so upgrading a
+    ///         single chain applies the new dispute game config to the whole set.
+    function test_upgrade_migratedSetSwapsSharedDisputeGames_succeeds() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        _enableEthLockboxes();
+        _doMigration(_getDefaultMigrateInput());
+
+        IOptimismPortal2 portal1 = IOptimismPortal2(payable(chainContracts1.systemConfig.optimismPortal()));
+        IOptimismPortal2 portal2 = IOptimismPortal2(payable(chainContracts2.systemConfig.optimismPortal()));
+        IAnchorStateRegistry sharedAsr = portal1.anchorStateRegistry();
+        IDisputeGameFactory sharedDgf = sharedAsr.disputeGameFactory();
+        (Hash anchorBefore,) = sharedAsr.getAnchorRoot();
+
+        assertTrue(address(sharedDgf.gameImpls(GameTypes.SUPER_PERMISSIONED)) != address(0), "source not registered");
+        assertEq(address(sharedDgf.gameImpls(GameTypes.ZK_DISPUTE_GAME)), address(0), "ZK already registered");
+
+        // Enable ZK and make it the respected game type. SUPER_PERMISSIONED stays enabled with a
+        // new proposer, the production shape where a permissioned game is kept as a liveness
+        // backup, so the upgrade must rebuild its args against the shared registry.
+        address newProposer = makeAddr("swapProposer");
+        IOPContractsManagerUtils.DisputeGameConfig[] memory dgConfigs =
+            new IOPContractsManagerUtils.DisputeGameConfig[](6);
+        dgConfigs[0] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.CANNON, gameArgs: bytes("")
+        });
+        dgConfigs[1] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.PERMISSIONED_CANNON, gameArgs: bytes("")
+        });
+        dgConfigs[2] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.CANNON_KONA, gameArgs: bytes("")
+        });
+        dgConfigs[3] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: true,
+            initBond: 0,
+            gameType: GameTypes.SUPER_PERMISSIONED,
+            gameArgs: abi.encode(IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig({ proposer: newProposer }))
+        });
+        dgConfigs[4] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.SUPER_CANNON_KONA, gameArgs: bytes("")
+        });
+        dgConfigs[5] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: true,
+            initBond: 1 ether,
+            gameType: GameTypes.ZK_DISPUTE_GAME,
+            gameArgs: abi.encode(
+                IOPContractsManagerUtils.ZKDisputeGameConfig({
+                    absolutePrestate: Claim.wrap(bytes32(keccak256("zk prestate"))),
+                    maxChallengeDuration: Duration.wrap(uint64(7 days)),
+                    maxProveDuration: Duration.wrap(uint64(3 days)),
+                    challengerBond: 1 ether
+                })
+            )
+        });
+
+        IOPContractsManagerUtils.ExtraInstruction[] memory instructions =
+            new IOPContractsManagerUtils.ExtraInstruction[](1);
+        instructions[0] = IOPContractsManagerUtils.ExtraInstruction({
+            key: "overrides.cfg.startingRespectedGameType", data: abi.encode(GameTypes.ZK_DISPUTE_GAME)
+        });
+
+        IOPContractsManagerV2.UpgradeInput memory upgradeInput = IOPContractsManagerV2.UpgradeInput({
+            systemConfig: chainContracts1.systemConfig, disputeGameConfigs: dgConfigs, extraInstructions: instructions
+        });
+
+        prankDelegateCall(chainContracts1.proxyAdmin.owner());
+        (bool success,) = address(opcmV2).delegatecall(abi.encodeCall(IOPContractsManagerV2.upgrade, (upgradeInput)));
+        assertTrue(success, "upgrade failed");
+
+        assertTrue(address(sharedDgf.gameImpls(GameTypes.ZK_DISPUTE_GAME)) != address(0), "ZK not registered");
+        assertEq(sharedDgf.initBonds(GameTypes.ZK_DISPUTE_GAME), 1 ether, "ZK init bond not set");
+        // The co-enabled permissioned game survives with args rebuilt against the shared registry.
+        assertTrue(address(sharedDgf.gameImpls(GameTypes.SUPER_PERMISSIONED)) != address(0), "source game not retained");
+        LibGameArgs.SuperPermissionedGameArgs memory sourceArgs =
+            LibGameArgs.decodeSuperPermissioned(sharedDgf.gameArgs(GameTypes.SUPER_PERMISSIONED));
+        assertEq(sourceArgs.proposer, newProposer, "source proposer not updated");
+        assertEq(sourceArgs.anchorStateRegistry, address(sharedAsr), "source game args lost the shared registry");
+        assertEq(sharedAsr.respectedGameType().raw(), GameTypes.ZK_DISPUTE_GAME.raw(), "respected not ZK");
+
+        // The anchor root is preserved because the upgrade reads it back from the shared registry.
+        (Hash anchorAfter,) = sharedAsr.getAnchorRoot();
+        assertEq(anchorAfter.raw(), anchorBefore.raw(), "anchor root changed");
+
+        // The chain that was not upgraded still points at the same shared contracts.
+        assertEq(address(portal2.anchorStateRegistry()), address(sharedAsr), "chain 2 lost the shared registry");
+    }
+
+    /// @notice Tests that the migration function succeeds and liquidity is migrated.
+    function test_migrate_clearsEveryCanonicalGameType_succeeds() public {
+        // _deployChainForMigration only enables SUPER_PERMISSIONED, so seed the rest first.
+        _seedClearedGameTypes(chainContracts1.disputeGameFactory);
+        _seedClearedGameTypes(chainContracts2.disputeGameFactory);
+
+        _doMigration(_getDefaultMigrateInput());
+
+        GameType[] memory gameTypes = GameTypes.clearedGameTypes();
+        for (uint256 i = 0; i < gameTypes.length; i++) {
+            string memory label = vm.toString(gameTypes[i].raw());
+            _assertGameIsEmpty(chainContracts1.disputeGameFactory, gameTypes[i], string.concat("chain 1 type ", label));
+            _assertGameIsEmpty(chainContracts2.disputeGameFactory, gameTypes[i], string.concat("chain 2 type ", label));
+        }
+    }
+
+    function test_migrate_succeeds() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        IOptimismPortal2 portal1 = IOptimismPortal2(payable(chainContracts1.systemConfig.optimismPortal()));
+        IOptimismPortal2 portal2 = IOptimismPortal2(payable(chainContracts2.systemConfig.optimismPortal()));
+
+        assertFalse(chainContracts1.systemConfig.isFeatureEnabled(Features.INTEROP), "Chain 1 INTEROP starts enabled");
+        assertFalse(chainContracts2.systemConfig.isFeatureEnabled(Features.INTEROP), "Chain 2 INTEROP starts enabled");
+        _enableEthLockboxes();
+        assertFalse(
+            chainContracts1.systemConfig.isFeatureEnabled(Features.INTEROP), "Chain 1 INTEROP changed during setup"
+        );
+        assertFalse(
+            chainContracts2.systemConfig.isFeatureEnabled(Features.INTEROP), "Chain 2 INTEROP changed during setup"
+        );
+        assertTrue(
+            chainContracts1.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX), "Chain 1 ETH_LOCKBOX should be enabled"
+        );
+        assertTrue(
+            chainContracts2.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX), "Chain 2 ETH_LOCKBOX should be enabled"
+        );
+
+        // Pre-migration setup: fund the portals directly.
+        uint256 portal1Balance = 10 ether;
+        uint256 portal2Balance = 5 ether;
+        vm.deal(address(portal1), portal1Balance);
+        vm.deal(address(portal2), portal2Balance);
+
+        // Pre-migration: Get old DisputeGameFactories.
+        IDisputeGameFactory oldDGF1 = IDisputeGameFactory(payable(chainContracts1.systemConfig.disputeGameFactory()));
+        IDisputeGameFactory oldDGF2 = IDisputeGameFactory(payable(chainContracts2.systemConfig.disputeGameFactory()));
+
+        // Execute the migration.
+        _doMigration(input);
+
+        // Assert that the old game implementations are now zeroed out.
+        _assertOldGamesZeroed(oldDGF1);
+        _assertOldGamesZeroed(oldDGF2);
+
+        // Grab the AnchorStateRegistry from the OptimismPortal for both chains, confirm same.
+        assertEq(
+            address(portal1.anchorStateRegistry()),
+            address(portal2.anchorStateRegistry()),
+            "AnchorStateRegistry mismatch"
+        );
+
+        // Extract the AnchorStateRegistry now that we know it's the same on both chains.
+        IAnchorStateRegistry asr = portal1.anchorStateRegistry();
+
+        // Check that the starting anchor root is the same as the input.
+        {
+            (Hash root, uint256 l2SeqNum) = asr.getAnchorRoot();
+            assertEq(root.raw(), input.startingAnchorRoot.root.raw(), "Starting anchor root mismatch");
+            assertEq(l2SeqNum, input.startingAnchorRoot.l2SequenceNumber, "Starting anchor root L2 seq num mismatch");
+        }
+
+        // Grab the ETHLockbox from the OptimismPortal for both chains, confirm same.
+        assertEq(address(portal1.ethLockbox()), address(portal2.ethLockbox()), "ETHLockbox mismatch");
+
+        // Extract the new ETHLockbox now that we know it's the same on both chains.
+        IETHLockbox newLockbox = portal1.ethLockbox();
+
+        // Check that the ETHLockbox has authorized portals.
+        assertTrue(newLockbox.authorizedPortals(portal1), "ETHLockbox does not have portal 1 authorized");
+        assertTrue(newLockbox.authorizedPortals(portal2), "ETHLockbox does not have portal 2 authorized");
+
+        // Check that the INTEROP feature is enabled on both SystemConfigs.
+        assertTrue(
+            chainContracts1.systemConfig.isFeatureEnabled(Features.INTEROP), "Chain 1 INTEROP feature should be enabled"
+        );
+        assertTrue(
+            chainContracts2.systemConfig.isFeatureEnabled(Features.INTEROP), "Chain 2 INTEROP feature should be enabled"
+        );
+        // Check that the ETH_LOCKBOX feature is enabled on both SystemConfigs.
+        assertTrue(
+            chainContracts1.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX),
+            "Chain 1 ETH_LOCKBOX feature should be enabled"
+        );
+        assertTrue(
+            chainContracts2.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX),
+            "Chain 2 ETH_LOCKBOX feature should be enabled"
+        );
+
+        // Check that the init bonds are set correctly on the new DisputeGameFactory.
+        assertEq(
+            IDisputeGameFactory(asr.disputeGameFactory()).initBonds(GameTypes.SUPER_PERMISSIONED),
+            0,
+            "SUPER_PERMISSIONED init bond mismatch"
+        );
+        {
+            IDisputeGameFactory sharedDGF = IDisputeGameFactory(asr.disputeGameFactory());
+            if (address(sharedDGF.gameImpls(GameTypes.SUPER_CANNON_KONA)) != address(0)) {
+                address sharedWETH = LibGameArgs.decode(sharedDGF.gameArgs(GameTypes.SUPER_CANNON_KONA)).weth;
+                assertEq(chainContracts1.systemConfig.delayedWETH(), sharedWETH, "Chain 1 delayedWETH mismatch");
+                assertEq(chainContracts2.systemConfig.delayedWETH(), sharedWETH, "Chain 2 delayedWETH mismatch");
+            }
+        }
+
+        // Check that portal liquidity was migrated directly to the new shared lockbox.
+        assertEq(address(portal1).balance, 0, "Portal 1 should have 0 balance after migration");
+        assertEq(address(portal2).balance, 0, "Portal 2 should have 0 balance after migration");
+        assertEq(
+            address(newLockbox).balance,
+            portal1Balance + portal2Balance,
+            "New lockbox should have combined balance from both portals"
+        );
+    }
+
+    /// @notice Tests that existing per-chain lockbox liquidity is swept into the shared lockbox.
+    function test_migrate_sweepsExistingLockbox_succeeds() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        IOptimismPortal2 portal1 = IOptimismPortal2(payable(chainContracts1.systemConfig.optimismPortal()));
+        _enableEthLockboxes();
+        IETHLockbox oldLockbox1 = chainContracts1.ethLockbox;
+        IAnchorStateRegistry oldASR = portal1.anchorStateRegistry();
+        uint256 oldLockboxBalance = 7 ether;
+        vm.deal(address(oldLockbox1), oldLockboxBalance);
+
+        _doMigration(input);
+
+        IETHLockbox newLockbox = portal1.ethLockbox();
+        assertNotEq(address(newLockbox), address(oldLockbox1), "Migration should move portal to shared lockbox");
+        assertNotEq(
+            address(portal1.anchorStateRegistry()), address(oldASR), "Migration should move portal to shared ASR"
+        );
+        assertEq(address(oldLockbox1).balance, 0, "Old lockbox should have 0 balance after migration");
+        assertEq(address(newLockbox).balance, oldLockboxBalance, "New lockbox should receive old lockbox balance");
+        assertTrue(newLockbox.authorizedLockboxes(oldLockbox1), "Old lockbox should be authorized on new lockbox");
+    }
+
+    /// @notice Tests that the old per-chain AnchorStateRegistry and DelayedWETH follow the shared lockbox pause.
+    function test_migrate_oldContractsFollowSharedPause_succeeds() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        IOptimismPortal2 portal2 = IOptimismPortal2(payable(chainContracts2.systemConfig.optimismPortal()));
+        _enableEthLockboxes();
+        IAnchorStateRegistry oldASR = portal2.anchorStateRegistry();
+        IDelayedWETH oldWETH = IDelayedWETH(payable(chainContracts2.systemConfig.delayedWETH()));
+        Proposal memory oldRoot = oldASR.getStartingAnchorRoot();
+
+        _doMigration(input);
+
+        IETHLockbox newLockbox = portal2.ethLockbox();
+        assertEq(address(oldASR.ethLockbox()), address(newLockbox), "Old ASR should point at shared lockbox");
+        assertEq(address(oldWETH.ethLockbox()), address(newLockbox), "Old DelayedWETH should point at shared lockbox");
+        assertEq(
+            oldASR.getStartingAnchorRoot().root.raw(), oldRoot.root.raw(), "Old ASR anchor root should be unchanged"
+        );
+
+        vm.prank(superchainConfig.guardian());
+        superchainConfig.pause(address(newLockbox));
+        assertTrue(oldASR.paused(), "Old ASR should be paused by shared lockbox");
+        assertTrue(oldWETH.ethLockbox().paused(), "Old DelayedWETH should be paused by shared lockbox");
+    }
+
+    /// @notice Migration preserves pending withdrawals in the second chain's retired DelayedWETH.
+    function test_migrate_pendingWethWithdrawal_succeeds() public {
+        _enableEthLockboxes();
+        IDelayedWETH oldWETH = IDelayedWETH(payable(chainContracts2.systemConfig.delayedWETH()));
+        address depositor = makeAddr("depositor");
+        vm.deal(depositor, 1 ether);
+        vm.startPrank(depositor);
+        oldWETH.deposit{ value: 1 ether }();
+        oldWETH.unlock(depositor, 1 ether);
+        vm.stopPrank();
+        (uint256 amount, uint256 timestamp) = oldWETH.withdrawals(depositor, depositor);
+        uint256 delayBefore = oldWETH.delay();
+
+        _doMigration(_getDefaultMigrateInput());
+
+        assertNotEq(chainContracts2.systemConfig.delayedWETH(), address(oldWETH));
+        assertEq(oldWETH.delay(), delayBefore, "retired WETH delay");
+        assertEq(oldWETH.balanceOf(depositor), 1 ether);
+        (uint256 migratedAmount, uint256 migratedTimestamp) = oldWETH.withdrawals(depositor, depositor);
+        assertEq(migratedAmount, amount);
+        assertEq(migratedTimestamp, timestamp);
+        vm.warp(timestamp + oldWETH.delay());
+        vm.prank(depositor);
+        oldWETH.withdraw(depositor, 1 ether);
+        assertEq(depositor.balance, 1 ether);
+    }
+
+    /// @notice Upgrading SystemConfig after portal migration preserves its per-chain configuration.
+    function test_migrate_preservesSystemConfig_succeeds() public {
+        ISystemConfig config = chainContracts2.systemConfig;
+        bytes memory initArgs = abi.encode(
+            config.owner(),
+            config.basefeeScalar(),
+            config.blobbasefeeScalar(),
+            config.batcherHash(),
+            config.gasLimit(),
+            config.unsafeBlockSigner(),
+            config.resourceConfig(),
+            config.l2ChainId(),
+            config.superchainConfig()
+        );
+        ISystemConfig.Addresses memory expectedAddresses = config.getAddresses();
+        expectedAddresses.delayedWETH = chainContracts1.systemConfig.delayedWETH();
+
+        _doMigration(_getDefaultMigrateInput());
+
+        assertEq(abi.encode(config.getAddresses()), abi.encode(expectedAddresses));
+        assertEq(
+            abi.encode(
+                config.owner(),
+                config.basefeeScalar(),
+                config.blobbasefeeScalar(),
+                config.batcherHash(),
+                config.gasLimit(),
+                config.unsafeBlockSigner(),
+                config.resourceConfig(),
+                config.l2ChainId(),
+                config.superchainConfig()
+            ),
+            initArgs
+        );
+        assertTrue(config.isFeatureEnabled(Features.ETH_LOCKBOX));
+        assertTrue(config.isFeatureEnabled(Features.INTEROP));
+    }
+
+    /// @notice Tests that migration keeps each portal's proof maturity delay, gives the shared
+    ///         registry the finality delay the legacy registries agree on, leaves the legacy
+    ///         registries' delay untouched, and keeps every DelayedWETH's withdrawal delay.
+    function test_migrate_preservesWithdrawalDelays_succeeds() public {
+        // Give chain 2 a distinct, in-range proof maturity delay so a reset would be visible.
+        uint256 chain2ProofMaturity = chainContracts2.optimismPortal.minProofMaturityDelaySeconds();
+        address chain2PAO = chainContracts2.proxyAdmin.owner();
+        vm.prank(chain2PAO);
+        chainContracts2.optimismPortal.setProofMaturityDelaySeconds(chain2ProofMaturity);
+
+        uint256 chain1ProofMaturity = chainContracts1.optimismPortal.proofMaturityDelaySeconds();
+        uint256 legacyFinalityDelay = chainContracts1.anchorStateRegistry.disputeGameFinalityDelaySeconds();
+        assertEq(chainContracts2.anchorStateRegistry.disputeGameFinalityDelaySeconds(), legacyFinalityDelay);
+
+        // Give both DelayedWETHs the same distinct, in-range withdrawal delay so a reset to the
+        // default would be visible. They must agree or the migration refuses them.
+        IDelayedWETH weth1 = IDelayedWETH(payable(chainContracts1.systemConfig.delayedWETH()));
+        IDelayedWETH weth2 = IDelayedWETH(payable(chainContracts2.systemConfig.delayedWETH()));
+        uint256 wethDelay = weth1.minDelay();
+        assertTrue(wethDelay != weth1.delay());
+        vm.prank(chainContracts1.proxyAdmin.owner());
+        weth1.setDelay(wethDelay);
+        vm.prank(chain2PAO);
+        weth2.setDelay(wethDelay);
+
+        _doMigration(_getDefaultMigrateInput());
+
+        assertEq(chainContracts1.optimismPortal.proofMaturityDelaySeconds(), chain1ProofMaturity);
+        assertEq(chainContracts2.optimismPortal.proofMaturityDelaySeconds(), chain2ProofMaturity);
+
+        IAnchorStateRegistry sharedAsr = chainContracts1.optimismPortal.anchorStateRegistry();
+        assertEq(sharedAsr.disputeGameFinalityDelaySeconds(), legacyFinalityDelay, "shared ASR delay");
+        assertEq(chainContracts1.anchorStateRegistry.disputeGameFinalityDelaySeconds(), legacyFinalityDelay);
+        assertEq(chainContracts2.anchorStateRegistry.disputeGameFinalityDelaySeconds(), legacyFinalityDelay);
+
+        // The shared DelayedWETH is chain 1's; chain 2's is retired but keeps its delay for legacy games.
+        IDelayedWETH sharedWeth = IDelayedWETH(payable(chainContracts2.systemConfig.delayedWETH()));
+        assertEq(address(sharedWeth), address(weth1), "shared WETH");
+        assertEq(sharedWeth.delay(), wethDelay, "shared WETH delay");
+        assertEq(weth2.delay(), wethDelay, "legacy WETH delay");
+    }
+
+    /// @notice Tests that migration refuses chains whose DelayedWETHs disagree on the withdrawal
+    ///         delay, since every chain's new games would use the first chain's DelayedWETH.
+    function test_migrate_mismatchedWithdrawalDelays_reverts() public {
+        IDelayedWETH weth2 = IDelayedWETH(payable(chainContracts2.systemConfig.delayedWETH()));
+        uint256 otherDelay = weth2.minDelay();
+        assertTrue(otherDelay != IDelayedWETH(payable(chainContracts1.systemConfig.delayedWETH())).delay());
+        address chain2PAO = chainContracts2.proxyAdmin.owner();
+        vm.prank(chain2PAO);
+        weth2.setDelay(otherDelay);
+
+        _doMigration(
+            _getDefaultMigrateInput(),
+            IOPContractsManagerMigrator.OPContractsManagerMigrator_WithdrawalDelayMismatch.selector
+        );
+    }
+
+    /// @notice Tests that migration refuses chains whose registries disagree on the finality delay.
+    function test_migrate_mismatchedFinalityDelays_reverts() public {
+        uint256 otherDelay = chainContracts2.anchorStateRegistry.minDisputeGameFinalityDelaySeconds();
+        assertTrue(otherDelay != chainContracts1.anchorStateRegistry.disputeGameFinalityDelaySeconds());
+        address chain2PAO = chainContracts2.proxyAdmin.owner();
+        vm.prank(chain2PAO);
+        chainContracts2.anchorStateRegistry.setDisputeGameFinalityDelaySeconds(otherDelay);
+
+        _doMigration(
+            _getDefaultMigrateInput(),
+            IOPContractsManagerMigrator.OPContractsManagerMigrator_DisputeGameFinalityDelayMismatch.selector
+        );
+    }
+
+    /// @notice Tests that migration respects a pause keyed to an existing per-chain lockbox.
+    function test_migrate_oldLockboxPaused_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        _enableEthLockboxes();
+        IETHLockbox oldLockbox1 = chainContracts1.ethLockbox;
+
+        // The migrator must check the pause before switching the portal to the shared lockbox, or
+        // this local pause would become invisible because SystemConfig.paused() keys off ethLockbox().
+        ISuperchainConfig superchainConfig1 = chainContracts1.systemConfig.superchainConfig();
+        vm.prank(superchainConfig1.guardian());
+        superchainConfig1.pause(address(oldLockbox1));
+
+        prankDelegateCall(chainContracts1.proxyAdmin.owner());
+        (bool success, bytes memory returnData) =
+            address(opcmV2).delegatecall(abi.encodeCall(IOPContractsManagerV2.migrate, (input)));
+        assertFalse(success, "migration should revert while the old lockbox is paused");
+        assertEq(bytes4(returnData), IOPContractsManagerMigrator.OPContractsManagerMigrator_SystemPaused.selector);
+    }
+
+    /// @notice Migration is refused when the SuperchainConfig is behind this release's
+    ///         implementation.
+    function test_migrate_superchainConfigNeedsUpgrade_reverts() public {
+        vm.mockCall(address(superchainConfig), abi.encodeCall(ISuperchainConfig.version, ()), abi.encode("0.0.0"));
+
+        _doMigration(
+            _getDefaultMigrateInput(),
+            IOPContractsManagerMigrator.OPContractsManagerMigrator_SuperchainConfigNeedsUpgrade.selector
+        );
+    }
+
+    /// @notice Builds a version string offset from this OPCM's live version, so the migrate
+    ///         sequence fixtures below state the branch they target instead of a literal that
+    ///         silently changes meaning when the OPCM version is bumped.
+    /// @param _majorDelta Offset applied to the major component.
+    /// @param _minorDelta Offset applied to the minor component.
+    /// @return The offset version string.
+    function _opcmVersionOffset(int256 _majorDelta, int256 _minorDelta) internal view returns (string memory) {
+        SemverComp.Semver memory live = SemverComp.parse(opcmV2.version());
+        return string.concat(
+            vm.toString(uint256(int256(live.major) + _majorDelta)),
+            ".",
+            vm.toString(uint256(int256(live.minor) + _minorDelta)),
+            ".0"
+        );
+    }
+
+    /// @notice Migration is refused for a chain still on the previous release.
+    function test_migrate_chainOnPreviousRelease_reverts() public {
+        address oldOPCM = makeAddr("previousReleaseOPCM");
+        vm.mockCall(oldOPCM, abi.encodeCall(ISemver.version, ()), abi.encode(_opcmVersionOffset(-1, 0)));
+        vm.mockCall(
+            address(chainContracts1.systemConfig), abi.encodeCall(ISystemConfig.lastUsedOPCM, ()), abi.encode(oldOPCM)
+        );
+
+        _doMigration(
+            _getDefaultMigrateInput(), IOPContractsManagerV2.OPContractsManagerV2_InvalidUpgradeSequence.selector
+        );
+    }
+
+    /// @notice A different OPCM address on the same major is accepted.
+    function test_migrate_replacementOpcmSameRelease_succeeds() public {
+        address replacedOPCM = makeAddr("replacedSameReleaseOPCM");
+        vm.mockCall(replacedOPCM, abi.encodeCall(ISemver.version, ()), abi.encode(opcmV2.version()));
+        vm.mockCall(
+            address(chainContracts1.systemConfig),
+            abi.encodeCall(ISystemConfig.lastUsedOPCM, ()),
+            abi.encode(replacedOPCM)
+        );
+
+        _doMigration(_getDefaultMigrateInput());
+    }
+
+    /// @notice A chain last touched by a *newer* minor of this release is refused.
+    function test_migrate_chainOnNewerMinor_reverts() public {
+        address newerOPCM = makeAddr("newerMinorOPCM");
+        vm.mockCall(newerOPCM, abi.encodeCall(ISemver.version, ()), abi.encode(_opcmVersionOffset(0, 1)));
+        vm.mockCall(
+            address(chainContracts1.systemConfig), abi.encodeCall(ISystemConfig.lastUsedOPCM, ()), abi.encode(newerOPCM)
+        );
+
+        _doMigration(
+            _getDefaultMigrateInput(), IOPContractsManagerV2.OPContractsManagerV2_InvalidUpgradeSequence.selector
+        );
+    }
+
+    /// @notice Tests that migration cannot be rerun.
+    function test_migrate_calledTwice_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        _enableEthLockboxes();
+
+        _doMigration(input);
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_ChainAlreadyMigrated.selector);
+    }
+
+    /// @notice A second migration in a later block is rejected. The salt mixes block.timestamp, so
+    ///         moving forward one second gives the shared proxies fresh addresses and CREATE2 no
+    ///         longer collide.
+    function test_migrate_calledTwiceInLaterBlock_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        _enableEthLockboxes();
+
+        _doMigration(input);
+        vm.warp(block.timestamp + 1);
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_ChainAlreadyMigrated.selector);
+    }
+
+    /// @notice The guard is per-chain, so an input mixing a migrated chain with a fresh one is
+    ///         rejected.
+    function test_migrate_oneChainAlreadyMigrated_reverts() public {
+        _enableEthLockboxes();
+
+        // Migrate chain 2 on its own.
+        IOPContractsManagerMigrator.MigrateInput memory firstInput = _getDefaultMigrateInput();
+        ISystemConfig[] memory onlyChain2 = new ISystemConfig[](1);
+        onlyChain2[0] = chainContracts2.systemConfig;
+        firstInput.chainSystemConfigs = onlyChain2;
+        _doMigration(firstInput);
+
+        vm.warp(block.timestamp + 1);
+
+        // Try to migrate both chains together
+        _doMigration(
+            _getDefaultMigrateInput(),
+            IOPContractsManagerMigrator.OPContractsManagerMigrator_ChainAlreadyMigrated.selector
+        );
+    }
+
+    /// @notice A set member cannot clear INTEROP, so it cannot be re-migrated alone into a new set,
+    ///         which would drain the shared ETHLockbox and clear the shared DisputeGameFactory.
+    function test_migrate_interopDisableAfterMigration_reverts() public {
+        _enableEthLockboxes();
+        _doMigration(_getDefaultMigrateInput());
+
+        address proxyAdminOwner = chainContracts1.proxyAdmin.owner();
+        vm.expectRevert(ISystemConfig.SystemConfig_InvalidFeatureState.selector);
+        vm.prank(proxyAdminOwner);
+        chainContracts2.systemConfig.setFeature(Features.INTEROP, false);
+
+        vm.warp(block.timestamp + 12);
+
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        ISystemConfig[] memory onlyChain2 = new ISystemConfig[](1);
+        onlyChain2[0] = chainContracts2.systemConfig;
+        input.chainSystemConfigs = onlyChain2;
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_ChainAlreadyMigrated.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when the ProxyAdmin owners are mismatched.
+    /// @param _owner1 The owner address for the first chain's ProxyAdmin.
+    /// @param _owner2 The owner address for the second chain's ProxyAdmin.
+    function testFuzz_migrate_mismatchedProxyAdminOwners_reverts(address _owner1, address _owner2) public {
+        vm.assume(_owner1 != _owner2);
+        // Exclude the OPCM address itself: when the pranked delegate-call address equals
+        // address(opcmV2), the _onlyDelegateCall guard reverts before the owner check,
+        // producing a different revert selector than this test expects.
+        vm.assume(_owner1 != address(opcmV2));
+        vm.assume(_owner2 != address(opcmV2));
+        assumeNotPrecompile(_owner1);
+        assumeNotPrecompile(_owner2);
+        assumeNotForgeAddress(_owner1);
+        assumeNotForgeAddress(_owner2);
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        // Mock out the owners of the ProxyAdmins to be different.
+        vm.mockCall(
+            address(input.chainSystemConfigs[0].proxyAdmin()),
+            abi.encodeCall(IProxyAdmin.owner, ()),
+            abi.encode(_owner1)
+        );
+        vm.mockCall(
+            address(input.chainSystemConfigs[1].proxyAdmin()),
+            abi.encodeCall(IProxyAdmin.owner, ()),
+            abi.encode(_owner2)
+        );
+
+        // Execute the migration, expect revert.
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_ProxyAdminOwnerMismatch.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when the SuperchainConfig addresses are mismatched.
+    /// @param _config1 The SuperchainConfig address for the first chain.
+    /// @param _config2 The SuperchainConfig address for the second chain.
+    function testFuzz_migrate_mismatchedSuperchainConfig_reverts(address _config1, address _config2) public {
+        vm.assume(_config1 != _config2);
+        assumeNotPrecompile(_config1);
+        assumeNotPrecompile(_config2);
+        assumeNotForgeAddress(_config1);
+        assumeNotForgeAddress(_config2);
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        // Mock out the SuperchainConfig addresses to be different.
+        vm.mockCall(
+            address(input.chainSystemConfigs[0]),
+            abi.encodeCall(ISystemConfig.superchainConfig, ()),
+            abi.encode(_config1)
+        );
+        vm.mockCall(
+            address(input.chainSystemConfigs[1]),
+            abi.encodeCall(ISystemConfig.superchainConfig, ()),
+            abi.encode(_config2)
+        );
+
+        // Execute the migration, expect revert.
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_SuperchainConfigMismatch.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when the first chain's SystemConfig
+    ///         reports a zero l2ChainId. Zero would collide on the shared super-root system.
+    function test_migrate_zeroL2ChainId_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        vm.mockCall(
+            address(input.chainSystemConfigs[0]), abi.encodeCall(ISystemConfig.l2ChainId, ()), abi.encode(uint256(0))
+        );
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_ZeroL2ChainId.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when two chains share the same
+    ///         l2ChainId. Duplicates would let a single L2 withdrawal proof finalize through
+    ///         multiple portals.
+    /// @param _id The chain ID to use for both chains.
+    function testFuzz_migrate_duplicateL2ChainIds_reverts(uint256 _id) public {
+        vm.assume(_id != 0);
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        vm.mockCall(address(input.chainSystemConfigs[0]), abi.encodeCall(ISystemConfig.l2ChainId, ()), abi.encode(_id));
+        vm.mockCall(address(input.chainSystemConfigs[1]), abi.encodeCall(ISystemConfig.l2ChainId, ()), abi.encode(_id));
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_DuplicateL2ChainId.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when chainSystemConfigs are not
+    ///         provided in ascending l2ChainId order.
+    /// @param _idA The first chain's l2ChainId (must be greater than _idB).
+    /// @param _idB The second chain's l2ChainId.
+    function testFuzz_migrate_unsortedL2ChainIds_reverts(uint256 _idA, uint256 _idB) public {
+        vm.assume(_idB != 0);
+        vm.assume(_idA > _idB);
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        vm.mockCall(address(input.chainSystemConfigs[0]), abi.encodeCall(ISystemConfig.l2ChainId, ()), abi.encode(_idA));
+        vm.mockCall(address(input.chainSystemConfigs[1]), abi.encodeCall(ISystemConfig.l2ChainId, ()), abi.encode(_idB));
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_ChainIdsNotAscending.selector);
+    }
+
+    /// @notice Tests that a single-chain migration still rejects a zero l2ChainId. The
+    ///         strictly-ascending duplicate check is a no-op for N==1, but the non-zero check
+    ///         must still fire.
+    function test_migrate_singleChainZeroL2ChainId_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        ISystemConfig[] memory single = new ISystemConfig[](1);
+        single[0] = input.chainSystemConfigs[0];
+        input.chainSystemConfigs = single;
+
+        vm.mockCall(address(single[0]), abi.encodeCall(ISystemConfig.l2ChainId, ()), abi.encode(uint256(0)));
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_ZeroL2ChainId.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when no chains are provided.
+    function test_migrate_noChains_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        input.chainSystemConfigs = new ISystemConfig[](0);
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_NoChains.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when a chain uses a custom gas token.
+    function test_migrate_cgtChain_reverts() public {
+        vm.mockCall(
+            address(chainContracts1.systemConfig), abi.encodeCall(ISystemConfig.isCustomGasToken, ()), abi.encode(true)
+        );
+        _doMigration(
+            _getDefaultMigrateInput(),
+            IOPContractsManagerMigrator.OPContractsManagerMigrator_CustomGasTokenNotSupported.selector
+        );
+    }
+
+    /// @notice Tests that the migration function reverts when the starting respected game type is invalid.
+    /// @param _gameTypeRaw The raw game type value to test.
+    function testFuzz_migrate_invalidStartingRespectedGameType_reverts(uint32 _gameTypeRaw) public {
+        // Only SUPER_CANNON_KONA and SUPER_PERMISSIONED are valid. SUPER_CANNON (4) is a
+        // fuzz-reachable invalid input; see test_migrate_superCannonStartingRespectedGameType_reverts
+        // for the direct assertion.
+        vm.assume(_gameTypeRaw != GameTypes.SUPER_CANNON_KONA.raw());
+        vm.assume(_gameTypeRaw != GameTypes.SUPER_PERMISSIONED.raw());
+
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        // Set an invalid starting respected game type.
+        input.startingRespectedGameType = GameType.wrap(_gameTypeRaw);
+
+        // Execute the migration, expect revert.
+        _doMigration(
+            input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidStartingRespectedGameType.selector
+        );
+    }
+
+    /// @notice Tests that the migration function reverts when the starting respected game type is
+    ///         SUPER_CANNON. SUPER_CANNON is retired in favor of SUPER_CANNON_KONA.
+    function test_migrate_superCannonStartingRespectedGameType_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        input.startingRespectedGameType = GameTypes.SUPER_CANNON;
+        _doMigration(
+            input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidStartingRespectedGameType.selector
+        );
+    }
+
+    /// @notice Tests that the migration function reverts when the SUPER_PERMISSIONED game config
+    ///         has a non-zero init bond. SUPER_PERMISSIONED does not use bonds.
+    /// @param _initBond The non-zero init bond to test.
+    function testFuzz_migrate_superPermissionedNonZeroInitBond_reverts(uint256 _initBond) public {
+        vm.assume(_initBond != 0);
+
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        input.disputeGameConfigs[0].initBond = _initBond;
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidInitBond.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when a game type that uses bonds is given
+    ///         a zero init bond.
+    function test_migrate_bondedGameZeroInitBond_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        _appendDisputeGameConfig(input, _superCannonKonaConfig(0, superPrestate));
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidInitBond.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when a permissionless fault game config
+    ///         has a zero absolute prestate.
+    function test_migrate_zeroAbsolutePrestate_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        _appendDisputeGameConfig(input, _superCannonKonaConfig(0.08 ether, Claim.wrap(bytes32(0))));
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidAbsolutePrestate.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when a ZK_DISPUTE_GAME config is supplied
+    ///         while the ZK_DISPUTE_GAME dev feature is disabled.
+    function test_migrate_zkDisputeGameNotEnabled_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        // Game args are irrelevant: validation rejects the config before they are decoded.
+        _appendDisputeGameConfig(
+            input,
+            IOPContractsManagerUtils.DisputeGameConfig({
+                enabled: true, initBond: 0.08 ether, gameType: GameTypes.ZK_DISPUTE_GAME, gameArgs: hex""
+            })
+        );
+
+        vm.mockCall(
+            address(opcmV2.contractsContainer()),
+            abi.encodeCall(IOPContractsManagerContainer.isDevFeatureEnabled, (DevFeatures.ZK_DISPUTE_GAME)),
+            abi.encode(false)
+        );
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_ZKDisputeGameNotEnabled.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when a supplied game config is for a game
+    ///         type that does not use super roots.
+    function test_migrate_nonSuperGameType_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        _appendDisputeGameConfig(
+            input,
+            IOPContractsManagerUtils.DisputeGameConfig({
+                enabled: true,
+                initBond: 0.08 ether,
+                gameType: GameTypes.CANNON_KONA,
+                gameArgs: abi.encode(
+                    IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: superPrestate })
+                )
+            })
+        );
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidGameType.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when a supplied game config is disabled.
+    function test_migrate_disabledGameConfig_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        input.disputeGameConfigs[0].enabled = false;
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_DisputeGameNotEnabled.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when the starting respected game type is
+    ///         not one of the supplied game configs.
+    function test_migrate_startingRespectedGameTypeNotConfigured_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        input.startingRespectedGameType = GameTypes.SUPER_CANNON_KONA;
+
+        _doMigration(
+            input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidStartingRespectedGameType.selector
+        );
+    }
+
+    /// @notice Tests that the migration function reverts when a ZK_DISPUTE_GAME config has a zero
+    ///         absolute prestate.
+    function test_migrate_zkZeroAbsolutePrestate_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        _appendDisputeGameConfig(input, _zkDisputeGameConfig(1 ether, Claim.wrap(bytes32(0))));
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidZKDisputeGameConfig.selector);
+    }
+
+    /// @notice Tests that the migration function reverts when a ZK_DISPUTE_GAME config has a zero
+    ///         or greater-than-uint32-max challenge or prove duration.
+    function test_migrate_zkInvalidDurations_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        Claim zkPrestate = Claim.wrap(bytes32(keccak256("zk prestate")));
+        uint64[3] memory bad = [uint64(0), uint64(type(uint32).max) + 1, type(uint64).max];
+        for (uint256 i = 0; i < bad.length; i++) {
+            IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+            _appendDisputeGameConfig(input, _zkDisputeGameConfig(1 ether, zkPrestate, bad[i], uint64(3 days), 1 ether));
+            _doMigration(
+                input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidZKDisputeGameConfig.selector
+            );
+
+            input = _getDefaultMigrateInput();
+            _appendDisputeGameConfig(input, _zkDisputeGameConfig(1 ether, zkPrestate, uint64(7 days), bad[i], 1 ether));
+            _doMigration(
+                input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidZKDisputeGameConfig.selector
+            );
+        }
+    }
+
+    /// @notice Tests that the migration function reverts when a ZK_DISPUTE_GAME config has a zero
+    ///         challenger bond.
+    function test_migrate_zkZeroChallengerBond_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        _appendDisputeGameConfig(
+            input,
+            _zkDisputeGameConfig(
+                1 ether, Claim.wrap(bytes32(keccak256("zk prestate"))), uint64(7 days), uint64(3 days), 0
+            )
+        );
+
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InvalidZKDisputeGameConfig.selector);
+    }
+
+    /// @notice Tests that the migration function registers a ZK_DISPUTE_GAME config when the dev
+    ///         feature is enabled.
+    function test_migrate_zkDisputeGame_succeeds() public {
+        skipIfDevFeatureDisabled(DevFeatures.ZK_DISPUTE_GAME);
+
+        Claim zkPrestate = Claim.wrap(bytes32(keccak256("zk prestate")));
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+        _appendDisputeGameConfig(input, _zkDisputeGameConfig(1 ether, zkPrestate));
+
+        _doMigration(input);
+
+        IOptimismPortal2 portal = IOptimismPortal2(payable(chainContracts1.systemConfig.optimismPortal()));
+        IDisputeGameFactory sharedDGF = IDisputeGameFactory(payable(address(portal.disputeGameFactory())));
+
+        assertEq(
+            address(sharedDGF.gameImpls(GameTypes.ZK_DISPUTE_GAME)),
+            opcmV2.implementations().zkDisputeGameImpl,
+            "ZK game impl not registered in shared DGF"
+        );
+        assertEq(sharedDGF.initBonds(GameTypes.ZK_DISPUTE_GAME), 1 ether, "ZK init bond not set");
+
+        LibGameArgs.ZKGameArgs memory args = LibGameArgs.decodeZK(sharedDGF.gameArgs(GameTypes.ZK_DISPUTE_GAME));
+        assertEq(args.absolutePrestate, zkPrestate.raw(), "ZK absolute prestate mismatch");
+        assertEq(args.verifier, opcmV2.implementations().sp1PlonkAdapterImpl, "ZK verifier must be the release adapter");
+        assertEq(args.maxChallengeDuration, uint64(7 days), "ZK max challenge duration mismatch");
+        assertEq(args.maxProveDuration, uint64(3 days), "ZK max prove duration mismatch");
+        assertEq(args.challengerBond, 1 ether, "ZK challenger bond mismatch");
+        assertEq(args.anchorStateRegistry, address(portal.anchorStateRegistry()), "ZK anchor state registry mismatch");
+        assertEq(args.weth, chainContracts1.systemConfig.delayedWETH(), "ZK delayed WETH mismatch");
+    }
+
+    /// @notice Tests that the migration function succeeds with SUPER_CANNON_KONA as the starting
+    ///         respected game type. The default input registers SUPER_PERMISSIONED;
+    ///         this test appends a SUPER_CANNON_KONA config so the respected type has a matching impl.
+    function test_migrate_superCannonKonaStartingRespectedGameType_succeeds() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        // `superPrestate` is already a Claim; do not wrap it again.
+        _appendDisputeGameConfig(input, _superCannonKonaConfig(0.08 ether, superPrestate));
+        input.startingRespectedGameType = GameTypes.SUPER_CANNON_KONA;
+
+        _doMigration(input);
+
+        IOptimismPortal2 portal = IOptimismPortal2(payable(chainContracts1.systemConfig.optimismPortal()));
+        IDisputeGameFactory sharedDGF = IDisputeGameFactory(payable(address(portal.disputeGameFactory())));
+        IAnchorStateRegistry sharedASR = IAnchorStateRegistry(address(portal.anchorStateRegistry()));
+
+        assertTrue(
+            address(sharedDGF.gameImpls(GameTypes.SUPER_CANNON_KONA)) != address(0),
+            "SUPER_CANNON_KONA impl not registered in shared DGF"
+        );
+        assertEq(
+            sharedASR.respectedGameType().raw(),
+            GameTypes.SUPER_CANNON_KONA.raw(),
+            "ASR respected game type not SUPER_CANNON_KONA"
+        );
+    }
+
+    /// @notice Tests that the migration function reverts when the OPTIMISM_PORTAL_INTEROP dev
+    ///         feature is not enabled.
+    function test_migrate_interopNotEnabled_reverts() public {
+        IOPContractsManagerMigrator.MigrateInput memory input = _getDefaultMigrateInput();
+
+        // Mock the container's isDevFeatureEnabled to return false for OPTIMISM_PORTAL_INTEROP,
+        // simulating a container that was deployed without the interop dev feature.
+        vm.mockCall(
+            address(opcmV2.contractsContainer()),
+            abi.encodeCall(IOPContractsManagerContainer.isDevFeatureEnabled, (DevFeatures.OPTIMISM_PORTAL_INTEROP)),
+            abi.encode(false)
+        );
+
+        // Execute the migration, expect revert.
+        _doMigration(input, IOPContractsManagerMigrator.OPContractsManagerMigrator_InteropNotEnabled.selector);
+    }
+
+    /// @notice Builds the dispute game configs for upgrading a migrated super-permissioned
+    ///         interop chain. Order must match VALID_GAME_TYPES in
+    ///         OPContractsManagerV2._assertValidFullConfig(): only SUPER_PERMISSIONED is enabled,
+    ///         matching the respected game type the migration installs on the shared registry.
+    /// @return configs_ The dispute game configs.
+    function _interopUpgradeGameConfigs()
+        internal
+        returns (IOPContractsManagerUtils.DisputeGameConfig[] memory configs_)
+    {
+        address proposer = makeAddr("superProposer");
+        configs_ = new IOPContractsManagerUtils.DisputeGameConfig[](6);
+        configs_[0] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.CANNON, gameArgs: bytes("")
+        });
+        configs_[1] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.PERMISSIONED_CANNON, gameArgs: bytes("")
+        });
+        configs_[2] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.CANNON_KONA, gameArgs: bytes("")
+        });
+        configs_[3] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: true,
+            initBond: 0,
+            gameType: GameTypes.SUPER_PERMISSIONED,
+            gameArgs: abi.encode(IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig({ proposer: proposer }))
+        });
+        configs_[4] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.SUPER_CANNON_KONA, gameArgs: bytes("")
+        });
+        configs_[5] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.ZK_DISPUTE_GAME, gameArgs: bytes("")
+        });
+    }
+
+    /// @notice Runs the current OPCM upgrade for a migrated super-permissioned interop chain.
+    /// @param _systemConfig The chain's SystemConfig.
+    /// @param _pao The ProxyAdmin owner that must delegatecall the upgrade.
+    function _upgradeInteropChain(ISystemConfig _systemConfig, address _pao) internal {
+        IOPContractsManagerV2.UpgradeInput memory input;
+        input.systemConfig = _systemConfig;
+        input.disputeGameConfigs = _interopUpgradeGameConfigs();
+
+        prankDelegateCall(_pao);
+        (bool success,) = address(opcmV2).delegatecall(abi.encodeCall(IOPContractsManagerV2.upgrade, (input)));
+        assertTrue(success, "interop member chain upgrade failed");
+    }
+
+    /// @notice Regression test for ethereum-optimism/optimism#21731. After an interop migration
+    ///         the member chains share ETHLockbox / DisputeGameFactory / AnchorStateRegistry /
+    ///         DelayedWETH, all administered by the first chain's ProxyAdmin. upgrade() must resolve
+    ///         each proxy's own ProxyAdmin so upgrading a non-first member chain does not revert on
+    ///         the shared contracts' proxy admin-slot check. On develop this reverts for chain 2.
+    function test_upgrade_interopMemberChains_succeeds() public {
+        // Migrate the two-chain interop set.
+        _enableEthLockboxes();
+        _doMigration(_getDefaultMigrateInput());
+
+        // Resolve the shared infra established by the migration.
+        IOptimismPortal2 portal1 = IOptimismPortal2(payable(chainContracts1.systemConfig.optimismPortal()));
+        IAnchorStateRegistry sharedAsr = portal1.anchorStateRegistry();
+        IDisputeGameFactory sharedDgf = sharedAsr.disputeGameFactory();
+        IETHLockbox sharedLockbox = portal1.ethLockbox();
+        IDelayedWETH sharedWeth = IDelayedWETH(payable(chainContracts1.systemConfig.delayedWETH()));
+        uint256 sharedFinalityDelayBefore = sharedAsr.disputeGameFinalityDelaySeconds();
+        uint256 sharedWethDelayBefore = sharedWeth.delay();
+
+        // Give chain 2 a distinct, in-range proof maturity delay so a reset would be visible.
+        IOptimismPortal2 portal2 = IOptimismPortal2(payable(chainContracts2.systemConfig.optimismPortal()));
+        uint256 chain2ProofMaturity = portal2.minProofMaturityDelaySeconds();
+        vm.prank(chainContracts2.proxyAdmin.owner());
+        portal2.setProofMaturityDelaySeconds(chain2ProofMaturity);
+        uint256 chain1ProofMaturity = portal1.proofMaturityDelaySeconds();
+
+        // Sanity: the members have distinct ProxyAdmins, but the shared contracts are administered
+        // by the first chain's ProxyAdmin — the exact condition that breaks the naive upgrade path.
+        assertTrue(
+            address(chainContracts1.proxyAdmin) != address(chainContracts2.proxyAdmin),
+            "member chains should have distinct ProxyAdmins"
+        );
+        assertEq(
+            address(sharedDgf.proxyAdmin()),
+            address(chainContracts1.proxyAdmin),
+            "shared DisputeGameFactory should be administered by the first chain's ProxyAdmin"
+        );
+
+        // Shared contracts use the shared ETHLockbox.
+        assertTrue(
+            address(chainContracts1.systemConfig) != address(chainContracts2.systemConfig),
+            "member chains should have distinct SystemConfigs"
+        );
+        assertEq(
+            address(sharedAsr.ethLockbox()),
+            address(sharedLockbox),
+            "shared AnchorStateRegistry should be bound to the shared ETHLockbox"
+        );
+
+        // The common ProxyAdmin owner owns both chains' ProxyAdmins.
+        address pao = chainContracts1.proxyAdmin.owner();
+        assertEq(chainContracts2.proxyAdmin.owner(), pao, "both ProxyAdmins should share an owner");
+
+        // Upgrade BOTH member chains, including the non-first chain (chain 2). Neither may revert.
+        _upgradeInteropChain(chainContracts1.systemConfig, pao);
+        _upgradeInteropChain(chainContracts2.systemConfig, pao);
+
+        // Each chain's upgrade idempotently re-applies the shared-contract upgrades, so the shared
+        // contracts must end at the current target implementations.
+        IOPContractsManagerContainer.Implementations memory impls = opcmV2.implementations();
+        assertEq(
+            EIP1967Helper.getImplementation(address(sharedDgf)),
+            impls.disputeGameFactoryImpl,
+            "shared DisputeGameFactory not at target impl"
+        );
+        assertEq(
+            EIP1967Helper.getImplementation(address(sharedAsr)),
+            impls.anchorStateRegistryImpl,
+            "shared AnchorStateRegistry not at target impl"
+        );
+        assertEq(
+            EIP1967Helper.getImplementation(address(sharedLockbox)),
+            impls.ethLockboxImpl,
+            "shared ETHLockbox not at target impl"
+        );
+        assertEq(
+            EIP1967Helper.getImplementation(address(sharedWeth)),
+            impls.delayedWETHImpl,
+            "shared DelayedWETH not at target impl"
+        );
+
+        // Upgrading another member preserves the shared contracts.
+        assertEq(
+            address(sharedAsr.ethLockbox()),
+            address(sharedLockbox),
+            "shared AnchorStateRegistry re-pointed away from the shared ETHLockbox"
+        );
+        // Each member's upgrade re-initializes the shared registry with the delay it reads back.
+        assertEq(
+            sharedAsr.disputeGameFinalityDelaySeconds(),
+            sharedFinalityDelayBefore,
+            "shared AnchorStateRegistry finality delay changed"
+        );
+        // Each portal keeps its own proof maturity delay through the upgrade.
+        assertEq(portal1.proofMaturityDelaySeconds(), chain1ProofMaturity, "chain 1 proof maturity delay changed");
+        assertEq(portal2.proofMaturityDelaySeconds(), chain2ProofMaturity, "chain 2 proof maturity delay changed");
+        assertEq(
+            address(sharedLockbox.superchainConfig()),
+            address(chainContracts1.systemConfig.superchainConfig()),
+            "shared ETHLockbox re-pointed to a different SuperchainConfig"
+        );
+        assertEq(
+            address(sharedWeth.ethLockbox()),
+            address(sharedLockbox),
+            "shared DelayedWETH re-pointed away from the shared ETHLockbox"
+        );
+        assertEq(sharedWeth.delay(), sharedWethDelayBefore, "shared DelayedWETH delay changed");
+
+        // Per-chain contracts remain bound to their own chain's SystemConfig.
+        assertEq(
+            address(portal2.systemConfig()),
+            address(chainContracts2.systemConfig),
+            "chain 2 OptimismPortal should stay bound to chain 2's SystemConfig"
+        );
+    }
+}
+
+/// @title OPContractsManagerV2_FeatBatchUpgrade_Test
+/// @notice Tests batch upgrade functionality with freshly deployed chains (non-forked).
+contract OPContractsManagerV2_FeatBatchUpgrade_Test is OPContractsManagerV2_TestInit {
+    /// @notice Tests that multiple upgrade operations can be executed within a single transaction.
+    ///         This enforces the OPCMV2 invariant that multiple upgrade operations should be
+    ///         executable in one transaction.
+    function test_batchUpgrade_multipleChains_succeeds() public {
+        skipIfUnoptimized();
+
+        uint256 numberOfChains = 14;
+
+        // 1. Deploy BatchUpgrader helper contract.
+        BatchUpgrader batchUpgrader = new BatchUpgrader(opcmV2);
+
+        // 2. Set up base configuration for deploying chains.
+        IOPContractsManagerV2.FullConfig memory baseConfig;
+        baseConfig.superchainConfig = superchainConfig;
+        baseConfig.proxyAdminOwner = address(batchUpgrader);
+        baseConfig.systemConfigOwner = makeAddr("systemConfigOwner");
+        baseConfig.batcher = makeAddr("batcher");
+        baseConfig.unsafeBlockSigner = makeAddr("unsafeBlockSigner");
+        baseConfig.startingAnchorRoot = Proposal({ root: Hash.wrap(bytes32(hex"1234")), l2SequenceNumber: 123 });
+        bool superRoot = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+        baseConfig.startingRespectedGameType = superRoot ? GameTypes.SUPER_PERMISSIONED : GameTypes.PERMISSIONED_CANNON;
+        baseConfig.basefeeScalar = 1368;
+        baseConfig.blobBasefeeScalar = 801949;
+        baseConfig.gasLimit = 60_000_000;
+        baseConfig.proofMaturityDelaySeconds = 2 days;
+        baseConfig.disputeGameFinalityDelaySeconds = 1 days;
+        baseConfig.withdrawalDelaySeconds = 1 days;
+        baseConfig.resourceConfig = IResourceMetering.ResourceConfig({
+            maxResourceLimit: 20_000_000,
+            elasticityMultiplier: 10,
+            baseFeeMaxChangeDenominator: 8,
+            minimumBaseFee: 1 gwei,
+            systemTxMaxGas: 1_000_000,
+            maximumBaseFee: type(uint128).max
+        });
+
+        // Set up dispute game configs.
+        // In super root mode, SUPER_PERMISSIONED is enabled; otherwise PERMISSIONED_CANNON.
+        address initialChallenger = makeAddr("challenger");
+        address initialProposer = makeAddr("proposer");
+        IOPContractsManagerUtils.PermissionedDisputeGameConfig memory pdgConfig =
+            IOPContractsManagerUtils.PermissionedDisputeGameConfig({
+                absolutePrestate: cannonPrestate, proposer: initialProposer, challenger: initialChallenger
+            });
+        IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig memory superPdgConfig =
+            IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig({ proposer: initialProposer });
+        baseConfig.disputeGameConfigs = new IOPContractsManagerUtils.DisputeGameConfig[](6);
+        baseConfig.disputeGameConfigs[0] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.CANNON, gameArgs: bytes("")
+        });
+        baseConfig.disputeGameConfigs[1] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: !superRoot,
+            initBond: superRoot ? 0 : DEFAULT_DISPUTE_GAME_INIT_BOND,
+            gameType: GameTypes.PERMISSIONED_CANNON,
+            gameArgs: superRoot ? bytes("") : abi.encode(pdgConfig)
+        });
+        baseConfig.disputeGameConfigs[2] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.CANNON_KONA, gameArgs: bytes("")
+        });
+        baseConfig.disputeGameConfigs[3] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: superRoot,
+            initBond: 0,
+            gameType: GameTypes.SUPER_PERMISSIONED,
+            gameArgs: superRoot ? abi.encode(superPdgConfig) : bytes("")
+        });
+        baseConfig.disputeGameConfigs[4] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false, initBond: 0, gameType: GameTypes.SUPER_CANNON_KONA, gameArgs: bytes("")
+        });
+        baseConfig.disputeGameConfigs[5] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false,
+            initBond: 0,
+            gameType: GameTypes.ZK_DISPUTE_GAME,
+            gameArgs: abi.encode(
+                IOPContractsManagerUtils.ZKDisputeGameConfig({
+                    absolutePrestate: Claim.wrap(bytes32(0)),
+                    maxChallengeDuration: Duration.wrap(0),
+                    maxProveDuration: Duration.wrap(0),
+                    challengerBond: 0
+                })
+            )
+        });
+
+        // 3. Deploy multiple separate chains using opcmV2.deploy().
+        IOPContractsManagerV2.ChainContracts[] memory chains =
+            new IOPContractsManagerV2.ChainContracts[](numberOfChains);
+        for (uint256 i = 0; i < numberOfChains; i++) {
+            IOPContractsManagerV2.FullConfig memory config = baseConfig;
+            config.saltMixer = string.concat("chain-", vm.toString(i));
+            config.l2ChainId = 1000 + i;
+            chains[i] = opcmV2.deploy(config);
+        }
+
+        // 4. Prepare upgrade inputs for each chain.
+        IOPContractsManagerV2.UpgradeInput[] memory upgradeInputs =
+            new IOPContractsManagerV2.UpgradeInput[](numberOfChains);
+        for (uint256 i = 0; i < numberOfChains; i++) {
+            upgradeInputs[i] = IOPContractsManagerV2.UpgradeInput({
+                systemConfig: chains[i].systemConfig,
+                disputeGameConfigs: baseConfig.disputeGameConfigs,
+                extraInstructions: new IOPContractsManagerUtils.ExtraInstruction[](0)
+            });
+        }
+
+        // 5. Execute batch upgrade of all chains in a single transaction.
+        batchUpgrader.batchUpgrade(upgradeInputs);
+        VmSafe.Gas memory gas = vm.lastFrameGas();
+
+        // 6. Verify that the upgrade gas usage is less than the EIP-7825 gas limit.
+        // See https://eip.tools/eip/eip-7825.md for more details.
+        // The upgradeGasBuffer amount below is an approximation of the overhead that is required
+        // to execute a call to Safe.executeTransaction() prior to the call to IOPContractsManagerV2.upgrade().
+        // The approximate value of 65,000 gas, was taken from a previous upgrade transaction on OP Mainnet:
+        // https://dashboard.tenderly.co/oplabs/op-mainnet/tx/0x9b9aa2d8e857e1a28e55b124e931eac706b3ae04c1b33ba949f0366359860993/gas-usage?trace=0.1.7
+        uint256 fusakaLimit = 2 ** 24;
+        uint256 upgradeGasBuffer = 65_000;
+        assertLt(gas.gasTotalUsed, fusakaLimit - upgradeGasBuffer, "Upgrade exceeds gas target");
+
+        // 7. Verify all chains upgraded successfully.
+        for (uint256 i = 0; i < numberOfChains; i++) {
+            ISystemConfig systemConfig = chains[i].systemConfig;
+
+            // Verify OPCM release version was updated.
+            string memory version = systemConfig.lastUsedOPCMVersion();
+            assertEq(version, opcmV2.version(), string.concat("Chain ", vm.toString(i), " version mismatch"));
+
+            // Verify SystemConfig implementation was upgraded.
+            address impl = EIP1967Helper.getImplementation(address(systemConfig));
+            assertEq(
+                impl,
+                opcmV2.implementations().systemConfigImpl,
+                string.concat("Chain ", vm.toString(i), " SystemConfig impl not upgraded")
+            );
+        }
+    }
+}

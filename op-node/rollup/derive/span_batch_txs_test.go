@@ -1,0 +1,766 @@
+package derive
+
+import (
+	"bytes"
+	"math/big"
+	"math/rand"
+	"testing"
+
+	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
+
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
+	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-service/testutils"
+)
+
+type txTypeTest struct {
+	name   string
+	mkTx   func(rng *rand.Rand, signer types.Signer) *types.Transaction
+	signer types.Signer
+}
+
+func TestSpanBatchTxsZeroToBits(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x1234567))
+	chainID := big.NewInt(rng.Int63n(1000))
+
+	rawSpanBatch := RandomRawSpanBatch(rng, chainID)
+	zeroToBits := rawSpanBatch.txs.zeroToBits
+	totalBlockTxCount := rawSpanBatch.txs.totalBlockTxCount
+
+	var sbt spanBatchTxs
+	sbt.zeroToBits = zeroToBits
+	sbt.totalBlockTxCount = totalBlockTxCount
+
+	var buf bytes.Buffer
+	err := sbt.encodeZeroToBits(&buf)
+	require.NoError(t, err)
+
+	// zeroToBit field is fixed length: single bit
+	zeroToBitBufferLen := totalBlockTxCount / 8
+	if totalBlockTxCount%8 != 0 {
+		zeroToBitBufferLen++
+	}
+	require.Equal(t, buf.Len(), int(zeroToBitBufferLen))
+
+	result := buf.Bytes()
+	sbt.zeroToBits = nil
+
+	r := bytes.NewReader(result)
+	err = sbt.decodeZeroToBits(r)
+	require.NoError(t, err)
+
+	require.Equal(t, zeroToBits, sbt.zeroToBits)
+}
+
+func TestSpanBatchTxsZeroToCount(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x1337))
+	chainID := big.NewInt(rng.Int63n(1000))
+
+	rawSpanBatch := RandomRawSpanBatch(rng, chainID)
+
+	zeroToBits := rawSpanBatch.txs.zeroToBits
+	zeroToCount, err := rawSpanBatch.txs.zeroToCount()
+	require.NoError(t, err)
+	totalBlockTxCount := rawSpanBatch.txs.totalBlockTxCount
+
+	var sbt spanBatchTxs
+	sbt.zeroToBits = zeroToBits
+	sbt.totalBlockTxCount = totalBlockTxCount
+
+	var buf bytes.Buffer
+	err = sbt.encodeZeroToBits(&buf)
+	require.NoError(t, err)
+
+	result := buf.Bytes()
+	sbt.zeroToBits = nil
+
+	r := bytes.NewReader(result)
+	err = sbt.decodeZeroToBits(r)
+	require.NoError(t, err)
+
+	zeroToCount2, err := sbt.zeroToCount()
+	require.NoError(t, err)
+
+	require.Equal(t, zeroToCount, zeroToCount2)
+}
+
+func TestSpanBatchTxsYParityBits(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x7331))
+	chainID := big.NewInt(rng.Int63n(1000))
+
+	rawSpanBatch := RandomRawSpanBatch(rng, chainID)
+	yParityBits := rawSpanBatch.txs.yParityBits
+	totalBlockTxCount := rawSpanBatch.txs.totalBlockTxCount
+
+	var sbt spanBatchTxs
+	sbt.yParityBits = yParityBits
+	sbt.totalBlockTxCount = totalBlockTxCount
+
+	var buf bytes.Buffer
+	err := sbt.encodeYParityBits(&buf)
+	require.NoError(t, err)
+
+	// yParityBit field is fixed length: single bit
+	yParityBitBufferLen := totalBlockTxCount / 8
+	if totalBlockTxCount%8 != 0 {
+		yParityBitBufferLen++
+	}
+	require.Equal(t, buf.Len(), int(yParityBitBufferLen))
+
+	result := buf.Bytes()
+	sbt.yParityBits = nil
+
+	r := bytes.NewReader(result)
+	err = sbt.decodeYParityBits(r)
+	require.NoError(t, err)
+
+	require.Equal(t, yParityBits, sbt.yParityBits)
+}
+
+func TestSpanBatchTxsProtectedBits(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x7331))
+	chainID := big.NewInt(rng.Int63n(1000))
+
+	rawSpanBatch := RandomRawSpanBatch(rng, chainID)
+	protectedBits := rawSpanBatch.txs.protectedBits
+	txTypes := rawSpanBatch.txs.txTypes
+	totalBlockTxCount := rawSpanBatch.txs.totalBlockTxCount
+	totalLegacyTxCount := rawSpanBatch.txs.totalLegacyTxCount
+
+	var sbt spanBatchTxs
+	sbt.protectedBits = protectedBits
+	sbt.totalBlockTxCount = totalBlockTxCount
+	sbt.txTypes = txTypes
+	sbt.totalLegacyTxCount = totalLegacyTxCount
+
+	var buf bytes.Buffer
+	err := sbt.encodeProtectedBits(&buf)
+	require.NoError(t, err)
+
+	// protectedBit field is fixed length: single bit
+	protectedBitBufferLen := totalLegacyTxCount / 8
+	require.NoError(t, err)
+	if totalLegacyTxCount%8 != 0 {
+		protectedBitBufferLen++
+	}
+	require.Equal(t, buf.Len(), int(protectedBitBufferLen))
+
+	result := buf.Bytes()
+	sbt.protectedBits = nil
+
+	r := bytes.NewReader(result)
+	err = sbt.decodeProtectedBits(r)
+	require.NoError(t, err)
+
+	require.Equal(t, protectedBits, sbt.protectedBits)
+}
+
+func TestSpanBatchTxsTxSigs(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x73311337))
+	chainID := big.NewInt(rng.Int63n(1000))
+
+	rawSpanBatch := RandomRawSpanBatch(rng, chainID)
+	txSigs := rawSpanBatch.txs.txSigs
+	totalBlockTxCount := rawSpanBatch.txs.totalBlockTxCount
+
+	var sbt spanBatchTxs
+	sbt.totalBlockTxCount = totalBlockTxCount
+	sbt.txSigs = txSigs
+
+	var buf bytes.Buffer
+	err := sbt.encodeTxSigsRS(&buf)
+	require.NoError(t, err)
+
+	// txSig field is fixed length: 32 byte + 32 byte = 64 byte
+	require.Equal(t, buf.Len(), 64*int(totalBlockTxCount))
+
+	result := buf.Bytes()
+	sbt.txSigs = nil
+
+	r := bytes.NewReader(result)
+	err = sbt.decodeTxSigsRS(r)
+	require.NoError(t, err)
+
+	// v field is not set
+	for i := 0; i < int(totalBlockTxCount); i++ {
+		require.Equal(t, txSigs[i].r, sbt.txSigs[i].r)
+		require.Equal(t, txSigs[i].s, sbt.txSigs[i].s)
+	}
+}
+
+func TestSpanBatchTxsTxNonces(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x123456))
+	chainID := big.NewInt(rng.Int63n(1000))
+
+	rawSpanBatch := RandomRawSpanBatch(rng, chainID)
+	txNonces := rawSpanBatch.txs.txNonces
+	totalBlockTxCount := rawSpanBatch.txs.totalBlockTxCount
+
+	var sbt spanBatchTxs
+	sbt.totalBlockTxCount = totalBlockTxCount
+	sbt.txNonces = txNonces
+
+	var buf bytes.Buffer
+	err := sbt.encodeTxNonces(&buf)
+	require.NoError(t, err)
+
+	result := buf.Bytes()
+	sbt.txNonces = nil
+
+	r := bytes.NewReader(result)
+	err = sbt.decodeTxNonces(r)
+	require.NoError(t, err)
+
+	require.Equal(t, txNonces, sbt.txNonces)
+}
+
+func TestSpanBatchTxsTxGases(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x12345))
+	chainID := big.NewInt(rng.Int63n(1000))
+
+	rawSpanBatch := RandomRawSpanBatch(rng, chainID)
+	txGases := rawSpanBatch.txs.txGases
+	totalBlockTxCount := rawSpanBatch.txs.totalBlockTxCount
+
+	var sbt spanBatchTxs
+	sbt.totalBlockTxCount = totalBlockTxCount
+	sbt.txGases = txGases
+
+	var buf bytes.Buffer
+	err := sbt.encodeTxGases(&buf)
+	require.NoError(t, err)
+
+	result := buf.Bytes()
+	sbt.txGases = nil
+
+	r := bytes.NewReader(result)
+	err = sbt.decodeTxGases(r)
+	require.NoError(t, err)
+
+	require.Equal(t, txGases, sbt.txGases)
+}
+
+func TestSpanBatchTxsTxTos(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x54321))
+	chainID := big.NewInt(rng.Int63n(1000))
+
+	rawSpanBatch := RandomRawSpanBatch(rng, chainID)
+	txTos := rawSpanBatch.txs.txTos
+	zeroToBits := rawSpanBatch.txs.zeroToBits
+	totalBlockTxCount := rawSpanBatch.txs.totalBlockTxCount
+
+	var sbt spanBatchTxs
+	sbt.txTos = txTos
+	// creation bits and block tx count must be se to decode tos
+	sbt.zeroToBits = zeroToBits
+	sbt.totalBlockTxCount = totalBlockTxCount
+
+	var buf bytes.Buffer
+	err := sbt.encodeTxTos(&buf)
+	require.NoError(t, err)
+
+	// to field is fixed length: 20 bytes
+	require.Equal(t, buf.Len(), 20*len(txTos))
+
+	result := buf.Bytes()
+	sbt.txTos = nil
+
+	r := bytes.NewReader(result)
+	err = sbt.decodeTxTos(r)
+	require.NoError(t, err)
+
+	require.Equal(t, txTos, sbt.txTos)
+}
+
+func TestSpanBatchTxsTxDatas(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x1234))
+	chainID := big.NewInt(rng.Int63n(1000))
+
+	rawSpanBatch := RandomRawSpanBatch(rng, chainID)
+	txDatas := rawSpanBatch.txs.txDatas
+	txTypes := rawSpanBatch.txs.txTypes
+	totalBlockTxCount := rawSpanBatch.txs.totalBlockTxCount
+
+	var sbt spanBatchTxs
+	sbt.totalBlockTxCount = totalBlockTxCount
+
+	sbt.txDatas = txDatas
+
+	var buf bytes.Buffer
+	err := sbt.encodeTxDatas(&buf)
+	require.NoError(t, err)
+
+	result := buf.Bytes()
+	sbt.txDatas = nil
+	sbt.txTypes = nil
+
+	r := bytes.NewReader(result)
+	err = sbt.decodeTxDatas(r)
+	require.NoError(t, err)
+
+	require.Equal(t, txDatas, sbt.txDatas)
+	require.Equal(t, txTypes, sbt.txTypes)
+}
+
+func TestSpanBatchTxsAddTxs(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x1234))
+	chainID := big.NewInt(rng.Int63n(1000))
+	// make batches to extract txs from
+	batches := RandomValidConsecutiveSingularBatches(rng, chainID)
+	allTxs := [][]byte{}
+
+	iterativeSBTX, err := newSpanBatchTxs([][]byte{}, chainID)
+	require.NoError(t, err)
+	for i := 0; i < len(batches); i++ {
+		// explicitly extract txs due to mismatch of [][]byte to []hexutil.Bytes
+		txs := [][]byte{}
+		for j := 0; j < len(batches[i].Transactions); j++ {
+			txs = append(txs, batches[i].Transactions[j])
+		}
+		err = iterativeSBTX.AddTxs(txs, chainID)
+		require.NoError(t, err)
+		allTxs = append(allTxs, txs...)
+	}
+
+	fullSBTX, err := newSpanBatchTxs(allTxs, chainID)
+	require.NoError(t, err)
+
+	require.Equal(t, iterativeSBTX, fullSBTX)
+}
+
+func TestSpanBatchTxsRecoverV(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x123))
+
+	chainID := big.NewInt(rng.Int63n(1000))
+	pragueSigner := types.NewPragueSigner(chainID)
+	totalblockTxCount := 20 + rng.Intn(100)
+
+	cases := []txTypeTest{
+		{"unprotected legacy tx", testutils.RandomLegacyTx, types.HomesteadSigner{}},
+		{"legacy tx", testutils.RandomLegacyTx, pragueSigner},
+		{"access list tx", testutils.RandomAccessListTx, pragueSigner},
+		{"dynamic fee tx", testutils.RandomDynamicFeeTx, pragueSigner},
+		{"setcode tx", testutils.RandomSetCodeTx, pragueSigner},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var spanBatchTxs spanBatchTxs
+			var txTypes []int
+			var txSigs []spanBatchSignature
+			var originalVs []*big.Int
+			yParityBits := new(big.Int)
+			protectedBits := new(big.Int)
+			totalLegacyTxCount := 0
+			for idx := 0; idx < totalblockTxCount; idx++ {
+				tx := testCase.mkTx(rng, testCase.signer)
+				txType := tx.Type()
+				txTypes = append(txTypes, int(txType))
+				var txSig spanBatchSignature
+				v, r, s := tx.RawSignatureValues()
+				if txType == types.LegacyTxType {
+					protectedBit := uint(0)
+					if tx.Protected() {
+						protectedBit = uint(1)
+					}
+					protectedBits.SetBit(protectedBits, int(totalLegacyTxCount), protectedBit)
+					totalLegacyTxCount++
+				}
+				// Do not fill in txSig.V
+				txSig.r, _ = uint256.FromBig(r)
+				txSig.s, _ = uint256.FromBig(s)
+				txSigs = append(txSigs, txSig)
+				originalVs = append(originalVs, v)
+				yParityBit, err := convertVToYParity(v, int(tx.Type()))
+				require.NoError(t, err)
+				yParityBits.SetBit(yParityBits, idx, yParityBit)
+			}
+
+			spanBatchTxs.yParityBits = yParityBits
+			spanBatchTxs.txSigs = txSigs
+			spanBatchTxs.txTypes = txTypes
+			spanBatchTxs.protectedBits = protectedBits
+			// recover txSig.v
+			err := spanBatchTxs.recoverV(chainID)
+			require.NoError(t, err)
+
+			var recoveredVs []*big.Int
+			for _, txSig := range spanBatchTxs.txSigs {
+				recoveredVs = append(recoveredVs, txSig.v)
+			}
+			requireEqual(t, originalVs, recoveredVs, "recovered v mismatch")
+		})
+	}
+}
+
+func TestSpanBatchTxsRoundTrip(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x73311337))
+	chainID := big.NewInt(rng.Int63n(1000))
+
+	for i := 0; i < 4; i++ {
+		rawSpanBatch := RandomRawSpanBatch(rng, chainID)
+		sbt := rawSpanBatch.txs
+		totalBlockTxCount := sbt.totalBlockTxCount
+
+		var buf bytes.Buffer
+		err := sbt.encode(&buf)
+		require.NoError(t, err)
+
+		result := buf.Bytes()
+		r := bytes.NewReader(result)
+
+		var sbt2 spanBatchTxs
+		sbt2.totalBlockTxCount = totalBlockTxCount
+		err = sbt2.decode(r)
+		require.NoError(t, err)
+
+		err = sbt2.recoverV(chainID)
+		require.NoError(t, err)
+
+		requireEqual(t, sbt, &sbt2)
+	}
+}
+
+func TestSpanBatchTxsRoundTripFullTxs(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x13377331))
+	chainID := big.NewInt(rng.Int63n(1000))
+	pragueSigner := types.NewPragueSigner(chainID)
+
+	cases := []txTypeTest{
+		{"unprotected legacy tx", testutils.RandomLegacyTx, types.HomesteadSigner{}},
+		{"legacy tx", testutils.RandomLegacyTx, pragueSigner},
+		{"access list tx", testutils.RandomAccessListTx, pragueSigner},
+		{"dynamic fee tx", testutils.RandomDynamicFeeTx, pragueSigner},
+		{"setcode tx", testutils.RandomSetCodeTx, pragueSigner},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			for i := 0; i < 4; i++ {
+				totalblockTxCounts := uint64(1 + rng.Int()&0xFF)
+				var txs [][]byte
+				for i := 0; i < int(totalblockTxCounts); i++ {
+					tx := testCase.mkTx(rng, testCase.signer)
+					rawTx, err := tx.MarshalBinary()
+					require.NoError(t, err)
+					txs = append(txs, rawTx)
+				}
+				sbt, err := newSpanBatchTxs(txs, chainID)
+				require.NoError(t, err)
+
+				txs2, err := sbt.fullTxs(chainID)
+				require.NoError(t, err)
+
+				require.Equal(t, txs, txs2)
+			}
+		})
+	}
+}
+
+func TestSpanBatchTxsPostExecRoundTripFullTxs(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x7d7331))
+	chainID := big.NewInt(901)
+	signer := types.NewPragueSigner(chainID)
+
+	rawNormalTx, err := testutils.RandomDynamicFeeTx(rng, signer).MarshalBinary()
+	require.NoError(t, err)
+	rawPostExecTx, err := testPostExecTx().MarshalBinary()
+	require.NoError(t, err)
+	txs := [][]byte{rawNormalTx, rawPostExecTx}
+
+	sbt, err := newSpanBatchTxs(txs, chainID)
+	require.NoError(t, err)
+
+	txs2, err := sbt.fullTxs(chainID)
+	require.NoError(t, err)
+	require.Equal(t, txs, txs2)
+}
+
+// TestSpanBatchTxsPostExecFieldsMatchGeth pins the span batch fields that AddTxs
+// derives from a post-exec tx's canonical encoding against op-geth's view of the
+// same transaction. It is op-geth-specific by construction: upstream go-ethereum
+// does not decode the 0x7D class at all, which is why the fields are derived from
+// the encoding instead of from a go-ethereum transaction.
+func TestSpanBatchTxsPostExecFieldsMatchGeth(t *testing.T) {
+	raw, err := testPostExecTx().MarshalBinary()
+	require.NoError(t, err)
+	sbt, err := newSpanBatchTxs([][]byte{raw}, big.NewInt(901))
+	require.NoError(t, err)
+
+	gethTx := testPostExecGethTx(t)
+	v, r, s := gethTx.RawSignatureValues()
+	require.Equal(t, []int{int(gethTx.Type())}, sbt.txTypes)
+	require.Equal(t, []uint64{gethTx.Nonce()}, sbt.txNonces)
+	require.Equal(t, []uint64{gethTx.Gas()}, sbt.txGases)
+	require.Zero(t, sbt.txSigs[0].v.Cmp(v))
+	require.Zero(t, sbt.txSigs[0].r.ToBig().Cmp(r))
+	require.Zero(t, sbt.txSigs[0].s.ToBig().Cmp(s))
+	require.Equal(t, uint(0), sbt.yParityBits.Bit(0))
+
+	require.Nil(t, gethTx.To())
+	require.Empty(t, sbt.txTos, "a tx without recipient stores no address")
+	require.Equal(t, uint(1), sbt.zeroToBits.Bit(0))
+
+	require.Equal(t, gethTx.Data(), testPostExecTx().Data, "op-geth carries the payload verbatim")
+	require.Equal(t, hexutil.Bytes(raw), sbt.txDatas[0])
+}
+
+// TestSpanBatchTxsAddTxsPostExec covers the span-position bookkeeping of post-exec
+// txs across multiple AddTxs calls: adding a trailing post-exec tx per block, block
+// by block, must yield the same fields as one call over all transactions, and
+// reconstruct every transaction verbatim.
+func TestSpanBatchTxsAddTxsPostExec(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x7d0f5e7))
+	chainID := big.NewInt(901)
+	signer := types.NewPragueSigner(chainID)
+	rawPostExecTx, err := testPostExecTx().MarshalBinary()
+	require.NoError(t, err)
+
+	blocks := make([][][]byte, 3)
+	var allTxs [][]byte
+	for i := range blocks {
+		var txs [][]byte
+		for j := 0; j < 2; j++ {
+			rawTx, err := testutils.RandomDynamicFeeTx(rng, signer).MarshalBinary()
+			require.NoError(t, err)
+			txs = append(txs, rawTx)
+		}
+		blocks[i] = append(txs, rawPostExecTx)
+		allTxs = append(allTxs, blocks[i]...)
+	}
+
+	iterative, err := newSpanBatchTxs([][]byte{}, chainID)
+	require.NoError(t, err)
+	for _, txs := range blocks {
+		require.NoError(t, iterative.AddTxs(txs, chainID))
+	}
+	full, err := newSpanBatchTxs(allTxs, chainID)
+	require.NoError(t, err)
+	require.Equal(t, iterative, full)
+
+	fullTxs, err := full.fullTxs(chainID)
+	require.NoError(t, err)
+	require.Equal(t, allTxs, fullTxs)
+}
+
+func TestSpanBatchTxsPostExecSkipsChainIDValidation(t *testing.T) {
+	chainID := big.NewInt(901)
+	rawPostExecTx, err := testPostExecTx().MarshalBinary()
+	require.NoError(t, err)
+
+	_, err = newSpanBatchTxs([][]byte{rawPostExecTx}, chainID)
+	require.NoError(t, err)
+}
+
+func TestSpanBatchTxsRejectsWrongChainIDForProtectedTx(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x901902))
+	chainID := big.NewInt(901)
+	wrongChainID := big.NewInt(902)
+	tx := testutils.RandomDynamicFeeTx(rng, types.NewPragueSigner(wrongChainID))
+	rawTx, err := tx.MarshalBinary()
+	require.NoError(t, err)
+
+	_, err = newSpanBatchTxs([][]byte{rawTx}, chainID)
+	require.ErrorContains(t, err, "protected tx has chain ID 902, but expected chain ID 901")
+}
+
+func TestSpanBatchTxsRecoverVInvalidTxType(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x321))
+	chainID := big.NewInt(rng.Int63n(1000))
+
+	var sbt spanBatchTxs
+
+	sbt.txTypes = []int{optypes.DepositTxType}
+	sbt.txSigs = []spanBatchSignature{{v: big.NewInt(0), r: nil, s: nil}}
+	sbt.yParityBits = new(big.Int)
+	sbt.protectedBits = new(big.Int)
+
+	err := sbt.recoverV(chainID)
+	require.ErrorContains(t, err, "invalid tx type")
+}
+
+func TestSpanBatchTxsFullTxNotEnoughTxTos(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x13572468))
+	chainID := big.NewInt(rng.Int63n(1000))
+	pragueSigner := types.NewPragueSigner(chainID)
+
+	cases := []txTypeTest{
+		{"unprotected legacy tx", testutils.RandomLegacyTx, types.HomesteadSigner{}},
+		{"legacy tx", testutils.RandomLegacyTx, pragueSigner},
+		{"access list tx", testutils.RandomAccessListTx, pragueSigner},
+		{"dynamic fee tx", testutils.RandomDynamicFeeTx, pragueSigner},
+		{"setcode tx", testutils.RandomSetCodeTx, pragueSigner},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			totalblockTxCounts := uint64(1 + rng.Int()&0xFF)
+			var txs [][]byte
+			for i := 0; i < int(totalblockTxCounts); i++ {
+				tx := testCase.mkTx(rng, testCase.signer)
+				rawTx, err := tx.MarshalBinary()
+				require.NoError(t, err)
+				txs = append(txs, rawTx)
+			}
+			sbt, err := newSpanBatchTxs(txs, chainID)
+			require.NoError(t, err)
+
+			// drop single to field
+			sbt.txTos = sbt.txTos[:len(sbt.txTos)-2]
+
+			_, err = sbt.fullTxs(chainID)
+			require.EqualError(t, err, "tx to not enough")
+		})
+	}
+}
+
+func TestSpanBatchTxsMaxZeroToBitsLength(t *testing.T) {
+	var sbt spanBatchTxs
+	sbt.totalBlockTxCount = 0xFFFFFFFFFFFFFFFF
+
+	r := bytes.NewReader([]byte{})
+	err := sbt.decodeZeroToBits(r)
+	require.ErrorIs(t, err, ErrTooBigSpanBatchSize)
+}
+
+func TestSpanBatchTxsMaxYParityBitsLength(t *testing.T) {
+	var sb RawSpanBatch
+	sb.blockCount = 0xFFFFFFFFFFFFFFFF
+
+	r := bytes.NewReader([]byte{})
+	err := sb.decodeOriginBits(r)
+	require.ErrorIs(t, err, ErrTooBigSpanBatchSize)
+}
+
+func TestSpanBatchTxsMaxProtectedBitsLength(t *testing.T) {
+	var sb RawSpanBatch
+	sb.txs = &spanBatchTxs{}
+	sb.txs.totalLegacyTxCount = 0xFFFFFFFFFFFFFFFF
+
+	r := bytes.NewReader([]byte{})
+	err := sb.txs.decodeProtectedBits(r)
+	require.ErrorIs(t, err, ErrTooBigSpanBatchSize)
+}
+
+// TestSpanBatchTxsCheckPostExecSlots covers the Lagoon rule that a decoder rejects a
+// span batch whose post-exec transaction does not carry the fixed slot values. Each
+// case mutates one slot of an otherwise honest encoding, which is what a batcher would
+// have to do deliberately: AddTxs never produces any of them.
+func TestSpanBatchTxsCheckPostExecSlots(t *testing.T) {
+	chainID := big.NewInt(901)
+	rawPostExecTx, err := testPostExecTx().MarshalBinary()
+	require.NoError(t, err)
+
+	honest := func(t *testing.T) *spanBatchTxs {
+		sbt, err := newSpanBatchTxs([][]byte{rawPostExecTx}, chainID)
+		require.NoError(t, err)
+		return sbt
+	}
+
+	// The unmodified encoding is accepted, so each failure below is caused by the
+	// mutation and not by the fixture.
+	require.NoError(t, honest(t).checkPostExecSlots())
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*spanBatchTxs)
+		expect string
+	}{
+		{
+			name:   "zero-to bit cleared",
+			mutate: func(s *spanBatchTxs) { s.zeroToBits.SetBit(s.zeroToBits, 0, 0) },
+			expect: "must set the zero-to bit",
+		},
+		{
+			name:   "y parity bit set",
+			mutate: func(s *spanBatchTxs) { s.yParityBits.SetBit(s.yParityBits, 0, 1) },
+			expect: "must have a zero y parity bit",
+		},
+		{
+			name:   "signature r non-zero",
+			mutate: func(s *spanBatchTxs) { s.txSigs[0].r = uint256.NewInt(1) },
+			expect: "must have a zero signature",
+		},
+		{
+			name:   "signature s non-zero",
+			mutate: func(s *spanBatchTxs) { s.txSigs[0].s = uint256.NewInt(1) },
+			expect: "must have a zero signature",
+		},
+		{
+			name:   "nonce non-zero",
+			mutate: func(s *spanBatchTxs) { s.txNonces[0] = 1 },
+			expect: "must have a zero nonce",
+		},
+		{
+			name:   "gas non-zero",
+			mutate: func(s *spanBatchTxs) { s.txGases[0] = 1 },
+			expect: "must have a zero gas limit",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sbt := honest(t)
+			tc.mutate(sbt)
+			err := sbt.checkPostExecSlots()
+			require.ErrorContains(t, err, tc.expect)
+		})
+	}
+}
+
+// TestSpanBatchTxsCheckPostExecSlotsIgnoresOtherTypes pins that the rule is scoped to
+// post-exec transactions: an ordinary transaction carries a real signature, nonce and
+// gas, and must not be rejected for it.
+func TestSpanBatchTxsCheckPostExecSlotsIgnoresOtherTypes(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x7d515))
+	chainID := big.NewInt(901)
+	signer := types.NewPragueSigner(chainID)
+
+	rawNormalTx, err := testutils.RandomDynamicFeeTx(rng, signer).MarshalBinary()
+	require.NoError(t, err)
+	rawPostExecTx, err := testPostExecTx().MarshalBinary()
+	require.NoError(t, err)
+
+	sbt, err := newSpanBatchTxs([][]byte{rawNormalTx, rawPostExecTx}, chainID)
+	require.NoError(t, err)
+	require.NoError(t, sbt.checkPostExecSlots())
+}
+
+// TestSpanBatchDeriveRejectsPostExecSlots pins the wiring: a span batch whose post-exec
+// slots were tampered with reaches derive and is rejected there, rather than being
+// reconstructed into the same blocks it would have produced with the slots zeroed.
+// Without the check derive succeeds, because the slots are discarded on reconstruction.
+func TestSpanBatchDeriveRejectsPostExecSlots(t *testing.T) {
+	chainID := big.NewInt(901)
+	l2BlockTime := uint64(2)
+	genesisTimeStamp := uint64(1000)
+
+	rawPostExecTx, err := testPostExecTx().MarshalBinary()
+	require.NoError(t, err)
+
+	newRaw := func(t *testing.T) *RawSpanBatch {
+		singularBatch := &SingularBatch{
+			ParentHash:   common.HexToHash("0x0102"),
+			EpochNum:     rollup.Epoch(8),
+			EpochHash:    common.HexToHash("0x0304"),
+			Timestamp:    genesisTimeStamp + l2BlockTime,
+			Transactions: []hexutil.Bytes{rawPostExecTx},
+		}
+		spanBatch := initializedSpanBatch([]*SingularBatch{singularBatch}, genesisTimeStamp, chainID)
+		rawSpanBatch, err := spanBatch.ToRawSpanBatch()
+		require.NoError(t, err)
+		return rawSpanBatch
+	}
+
+	// Untampered, the same batch derives cleanly.
+	_, err = newRaw(t).derive(l2BlockTime, genesisTimeStamp, chainID)
+	require.NoError(t, err)
+
+	rawSpanBatch := newRaw(t)
+	rawSpanBatch.txs.txNonces[0] = 7
+	_, err = rawSpanBatch.derive(l2BlockTime, genesisTimeStamp, chainID)
+	require.ErrorContains(t, err, "must have a zero nonce")
+}

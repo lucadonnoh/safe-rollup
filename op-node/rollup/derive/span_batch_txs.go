@@ -1,0 +1,554 @@
+package derive
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/holiman/uint256"
+
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
+)
+
+type spanBatchTxs struct {
+	// this field must be manually set
+	totalBlockTxCount uint64
+
+	// 8 fields
+	zeroToBits    *big.Int // standard span-batch bitlist
+	yParityBits   *big.Int // standard span-batch bitlist
+	txSigs        []spanBatchSignature
+	txNonces      []uint64
+	txGases       []uint64
+	txTos         []common.Address
+	txDatas       []hexutil.Bytes
+	protectedBits *big.Int // standard span-batch bitlist
+
+	// intermediate variables which can be recovered
+	txTypes            []int
+	totalLegacyTxCount uint64
+}
+
+type spanBatchSignature struct {
+	v *big.Int
+	r *uint256.Int
+	s *uint256.Int
+}
+
+func (btx *spanBatchTxs) encodeZeroToBits(w io.Writer) error {
+	if err := encodeSpanBatchBits(w, btx.totalBlockTxCount, btx.zeroToBits); err != nil {
+		return fmt.Errorf("failed to encode zero-to bits: %w", err)
+	}
+	return nil
+}
+
+func (btx *spanBatchTxs) decodeZeroToBits(r *bytes.Reader) error {
+	if btx.totalBlockTxCount > MaxSpanBatchElementCount {
+		return ErrTooBigSpanBatchSize
+	}
+	bits, err := decodeSpanBatchBits(r, btx.totalBlockTxCount)
+	if err != nil {
+		return fmt.Errorf("failed to decode zero-to bits: %w", err)
+	}
+	btx.zeroToBits = bits
+	return nil
+}
+
+func (btx *spanBatchTxs) encodeProtectedBits(w io.Writer) error {
+	if err := encodeSpanBatchBits(w, btx.totalLegacyTxCount, btx.protectedBits); err != nil {
+		return fmt.Errorf("failed to encode protected bits: %w", err)
+	}
+	return nil
+}
+
+func (btx *spanBatchTxs) decodeProtectedBits(r *bytes.Reader) error {
+	if btx.totalLegacyTxCount > MaxSpanBatchElementCount {
+		return ErrTooBigSpanBatchSize
+	}
+	bits, err := decodeSpanBatchBits(r, btx.totalLegacyTxCount)
+	if err != nil {
+		return fmt.Errorf("failed to decode protected bits: %w", err)
+	}
+	btx.protectedBits = bits
+	return nil
+}
+
+func (btx *spanBatchTxs) zeroToCount() (uint64, error) {
+	if btx.zeroToBits == nil {
+		return 0, errors.New("dev error: zero-to bits not set")
+	}
+	var result uint64 = 0
+	for i := 0; i < int(btx.totalBlockTxCount); i++ {
+		bit := btx.zeroToBits.Bit(i)
+		if bit == 1 {
+			result++
+		}
+	}
+	return result, nil
+}
+
+func (btx *spanBatchTxs) encodeYParityBits(w io.Writer) error {
+	if err := encodeSpanBatchBits(w, btx.totalBlockTxCount, btx.yParityBits); err != nil {
+		return fmt.Errorf("failed to encode y-parity bits: %w", err)
+	}
+	return nil
+}
+
+func (btx *spanBatchTxs) decodeYParityBits(r *bytes.Reader) error {
+	bits, err := decodeSpanBatchBits(r, btx.totalBlockTxCount)
+	if err != nil {
+		return fmt.Errorf("failed to decode y-parity bits: %w", err)
+	}
+	btx.yParityBits = bits
+	return nil
+}
+
+func (btx *spanBatchTxs) encodeTxSigsRS(w io.Writer) error {
+	for _, txSig := range btx.txSigs {
+		rBuf := txSig.r.Bytes32()
+		if _, err := w.Write(rBuf[:]); err != nil {
+			return fmt.Errorf("cannot write tx sig r: %w", err)
+		}
+		sBuf := txSig.s.Bytes32()
+		if _, err := w.Write(sBuf[:]); err != nil {
+			return fmt.Errorf("cannot write tx sig s: %w", err)
+		}
+	}
+	return nil
+}
+
+func (btx *spanBatchTxs) encodeTxNonces(w io.Writer) error {
+	var buf [binary.MaxVarintLen64]byte
+	for _, txNonce := range btx.txNonces {
+		n := binary.PutUvarint(buf[:], txNonce)
+		if _, err := w.Write(buf[:n]); err != nil {
+			return fmt.Errorf("cannot write tx nonce: %w", err)
+		}
+	}
+	return nil
+}
+
+func (btx *spanBatchTxs) encodeTxGases(w io.Writer) error {
+	var buf [binary.MaxVarintLen64]byte
+	for _, txGas := range btx.txGases {
+		n := binary.PutUvarint(buf[:], txGas)
+		if _, err := w.Write(buf[:n]); err != nil {
+			return fmt.Errorf("cannot write tx gas: %w", err)
+		}
+	}
+	return nil
+}
+
+func (btx *spanBatchTxs) encodeTxTos(w io.Writer) error {
+	for _, txTo := range btx.txTos {
+		if _, err := w.Write(txTo.Bytes()); err != nil {
+			return fmt.Errorf("cannot write tx to address: %w", err)
+		}
+	}
+	return nil
+}
+
+func (btx *spanBatchTxs) encodeTxDatas(w io.Writer) error {
+	for _, txData := range btx.txDatas {
+		if _, err := w.Write(txData); err != nil {
+			return fmt.Errorf("cannot write tx data: %w", err)
+		}
+	}
+	return nil
+}
+
+func (btx *spanBatchTxs) decodeTxSigsRS(r *bytes.Reader) error {
+	var txSigs []spanBatchSignature
+	var sigBuffer [32]byte
+	for i := 0; i < int(btx.totalBlockTxCount); i++ {
+		var txSig spanBatchSignature
+		_, err := io.ReadFull(r, sigBuffer[:])
+		if err != nil {
+			return fmt.Errorf("failed to read tx sig r: %w", err)
+		}
+		txSig.r, _ = uint256.FromBig(new(big.Int).SetBytes(sigBuffer[:]))
+		_, err = io.ReadFull(r, sigBuffer[:])
+		if err != nil {
+			return fmt.Errorf("failed to read tx sig s: %w", err)
+		}
+		txSig.s, _ = uint256.FromBig(new(big.Int).SetBytes(sigBuffer[:]))
+		txSigs = append(txSigs, txSig)
+	}
+	btx.txSigs = txSigs
+	return nil
+}
+
+func (btx *spanBatchTxs) decodeTxNonces(r *bytes.Reader) error {
+	var txNonces []uint64
+	for i := 0; i < int(btx.totalBlockTxCount); i++ {
+		txNonce, err := binary.ReadUvarint(r)
+		if err != nil {
+			return fmt.Errorf("failed to read tx nonce: %w", err)
+		}
+		txNonces = append(txNonces, txNonce)
+	}
+	btx.txNonces = txNonces
+	return nil
+}
+
+func (btx *spanBatchTxs) decodeTxGases(r *bytes.Reader) error {
+	var txGases []uint64
+	for i := 0; i < int(btx.totalBlockTxCount); i++ {
+		txGas, err := binary.ReadUvarint(r)
+		if err != nil {
+			return fmt.Errorf("failed to read tx gas: %w", err)
+		}
+		txGases = append(txGases, txGas)
+	}
+	btx.txGases = txGases
+	return nil
+}
+
+func (btx *spanBatchTxs) decodeTxTos(r *bytes.Reader) error {
+	var txTos []common.Address
+	txToBuffer := make([]byte, common.AddressLength)
+	zeroToCount, err := btx.zeroToCount()
+	if err != nil {
+		return err
+	}
+	for i := 0; i < int(btx.totalBlockTxCount-zeroToCount); i++ {
+		_, err := io.ReadFull(r, txToBuffer)
+		if err != nil {
+			return fmt.Errorf("failed to read tx to address: %w", err)
+		}
+		txTos = append(txTos, common.BytesToAddress(txToBuffer))
+	}
+	btx.txTos = txTos
+	return nil
+}
+
+func (btx *spanBatchTxs) decodeTxDatas(r *bytes.Reader) error {
+	var txDatas []hexutil.Bytes
+	var txTypes []int
+	// Do not need txDataHeader because RLP byte stream already includes length info
+	for i := 0; i < int(btx.totalBlockTxCount); i++ {
+		txData, txType, err := ReadTxData(r)
+		if err != nil {
+			return err
+		}
+		txDatas = append(txDatas, txData)
+		txTypes = append(txTypes, txType)
+		if txType == types.LegacyTxType {
+			btx.totalLegacyTxCount++
+		}
+	}
+	btx.txDatas = txDatas
+	btx.txTypes = txTypes
+	return nil
+}
+
+func (btx *spanBatchTxs) recoverV(chainID *big.Int) error {
+	if len(btx.txTypes) != len(btx.txSigs) {
+		return errors.New("tx type length and tx sigs length mismatch")
+	}
+	if btx.protectedBits == nil {
+		return errors.New("dev error: protected bits not set")
+	}
+	protectedBitsIdx := 0
+	for idx, txType := range btx.txTypes {
+		bit := btx.yParityBits.Bit(idx)
+		var v *big.Int
+		switch txType {
+		case types.LegacyTxType:
+			protectedBit := btx.protectedBits.Bit(protectedBitsIdx)
+			protectedBitsIdx++
+			if protectedBit == 0 {
+				// unprotected legacy: v = 27 + yParity
+				v = big.NewInt(int64(27 + bit))
+			} else {
+				// EIP-155: v = chainID * 2 + 35 + yParity
+				v = new(big.Int).Mul(chainID, big.NewInt(2))
+				v.Add(v, big.NewInt(35))
+				v.Add(v, big.NewInt(int64(bit)))
+			}
+		case types.AccessListTxType, types.DynamicFeeTxType, types.SetCodeTxType:
+			// For non-legacy tx types, v is just the y-parity bit (0 or 1).
+			v = big.NewInt(int64(bit))
+		case optypes.PostExecTxType:
+			// PostExec txs are synthetic, unsigned, and chain-agnostic.
+			v = big.NewInt(0)
+		default:
+			return fmt.Errorf("invalid tx type: %d", txType)
+		}
+		btx.txSigs[idx].v = v
+	}
+	return nil
+}
+
+func (btx *spanBatchTxs) encode(w io.Writer) error {
+	if err := btx.encodeZeroToBits(w); err != nil {
+		return err
+	}
+	if err := btx.encodeYParityBits(w); err != nil {
+		return err
+	}
+	if err := btx.encodeTxSigsRS(w); err != nil {
+		return err
+	}
+	if err := btx.encodeTxTos(w); err != nil {
+		return err
+	}
+	if err := btx.encodeTxDatas(w); err != nil {
+		return err
+	}
+	if err := btx.encodeTxNonces(w); err != nil {
+		return err
+	}
+	if err := btx.encodeTxGases(w); err != nil {
+		return err
+	}
+	if err := btx.encodeProtectedBits(w); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (btx *spanBatchTxs) decode(r *bytes.Reader) error {
+	if err := btx.decodeZeroToBits(r); err != nil {
+		return err
+	}
+	if err := btx.decodeYParityBits(r); err != nil {
+		return err
+	}
+	if err := btx.decodeTxSigsRS(r); err != nil {
+		return err
+	}
+	if err := btx.decodeTxTos(r); err != nil {
+		return err
+	}
+	if err := btx.decodeTxDatas(r); err != nil {
+		return err
+	}
+	if err := btx.decodeTxNonces(r); err != nil {
+		return err
+	}
+	if err := btx.decodeTxGases(r); err != nil {
+		return err
+	}
+	if err := btx.decodeProtectedBits(r); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (btx *spanBatchTxs) fullTxs(chainID *big.Int) ([][]byte, error) {
+	var txs [][]byte
+	toIdx := 0
+	for idx := 0; idx < int(btx.totalBlockTxCount); idx++ {
+		var stx spanBatchTx
+		if err := stx.UnmarshalBinary(btx.txDatas[idx]); err != nil {
+			return nil, err
+		}
+		nonce := btx.txNonces[idx]
+		gas := btx.txGases[idx]
+		var to *common.Address
+		bit := btx.zeroToBits.Bit(idx)
+		if bit == 0 {
+			if len(btx.txTos) <= toIdx {
+				return nil, errors.New("tx to not enough")
+			}
+			to = &btx.txTos[toIdx]
+			toIdx++
+		}
+		v := btx.txSigs[idx].v
+		r := btx.txSigs[idx].r.ToBig()
+		s := btx.txSigs[idx].s.ToBig()
+		encodedTx, err := stx.convertToFullTx(nonce, gas, to, chainID, v, r, s)
+		if err != nil {
+			return nil, err
+		}
+		txs = append(txs, encodedTx)
+	}
+	return txs, nil
+}
+
+func convertVToYParity(v *big.Int, txType int) (uint, error) {
+	var yParityBit uint
+	switch txType {
+	case types.LegacyTxType:
+		if isProtectedV(v, txType) {
+			// EIP-155: v = 2 * chainID + 35 + yParity
+			// v - 35 = yParity (mod 2)
+			vMinus35 := new(big.Int).Sub(v, big.NewInt(35))
+			yParityBit = uint(vMinus35.Bit(0))
+		} else {
+			// unprotected legacy txs must have v = 27 or 28
+			yParityBit = uint(bigs.Uint64Strict(v) - 27)
+		}
+	case types.AccessListTxType, types.DynamicFeeTxType, types.SetCodeTxType:
+		yParityBit = uint(bigs.Uint64Strict(v))
+	default:
+		return 0, fmt.Errorf("invalid tx type: %d", txType)
+	}
+	return yParityBit, nil
+}
+
+func isProtectedV(v *big.Int, txType int) bool {
+	if txType == types.LegacyTxType {
+		// if EIP-155 applied, v = 2 * chainID + 35 + yParity
+		// unprotected legacy txs have v = 27 or 28, so protected means v is neither
+		return !bigs.Equal(v, big.NewInt(27)) && !bigs.Equal(v, big.NewInt(28))
+	}
+	// every non legacy tx are protected
+	return true
+}
+
+func newSpanBatchTxs(txs [][]byte, chainID *big.Int) (*spanBatchTxs, error) {
+	sbtxs := &spanBatchTxs{
+		zeroToBits:    big.NewInt(0),
+		yParityBits:   big.NewInt(0),
+		txSigs:        []spanBatchSignature{},
+		txNonces:      []uint64{},
+		txGases:       []uint64{},
+		txTos:         []common.Address{},
+		txDatas:       []hexutil.Bytes{},
+		txTypes:       []int{},
+		protectedBits: big.NewInt(0),
+	}
+
+	if err := sbtxs.AddTxs(txs, chainID); err != nil {
+		return nil, err
+	}
+	return sbtxs, nil
+}
+
+func (sbtx *spanBatchTxs) AddTxs(txs [][]byte, chainID *big.Int) error {
+	offset := sbtx.totalBlockTxCount
+	for idx, rawTx := range txs {
+		if len(rawTx) > 0 && rawTx[0] == optypes.PostExecTxType {
+			if err := sbtx.addPostExecTx(rawTx, idx+int(offset)); err != nil {
+				return err
+			}
+			continue
+		}
+		tx := &types.Transaction{}
+		if err := tx.UnmarshalBinary(rawTx); err != nil {
+			return errors.New("failed to decode tx")
+		}
+		if tx.Type() == types.LegacyTxType {
+			protectedBit := uint(0)
+			if tx.Protected() {
+				protectedBit = uint(1)
+			}
+			sbtx.protectedBits.SetBit(sbtx.protectedBits, int(sbtx.totalLegacyTxCount), protectedBit)
+			sbtx.totalLegacyTxCount++
+		}
+		if tx.Protected() && tx.ChainId().Cmp(chainID) != 0 {
+			return fmt.Errorf("protected tx has chain ID %d, but expected chain ID %d", tx.ChainId(), chainID)
+		}
+		var txSig spanBatchSignature
+		v, r, s := tx.RawSignatureValues()
+		R, _ := uint256.FromBig(r)
+		S, _ := uint256.FromBig(s)
+		txSig.v = v
+		txSig.r = R
+		txSig.s = S
+		sbtx.txSigs = append(sbtx.txSigs, txSig)
+		zeroToBit := uint(1)
+		if tx.To() != nil {
+			sbtx.txTos = append(sbtx.txTos, *tx.To())
+			zeroToBit = uint(0)
+		}
+		sbtx.zeroToBits.SetBit(sbtx.zeroToBits, idx+int(offset), zeroToBit)
+		yParityBit, err := convertVToYParity(txSig.v, int(tx.Type()))
+		if err != nil {
+			return err
+		}
+		sbtx.yParityBits.SetBit(sbtx.yParityBits, idx+int(offset), yParityBit)
+		sbtx.txNonces = append(sbtx.txNonces, tx.Nonce())
+		sbtx.txGases = append(sbtx.txGases, tx.Gas())
+		stx, err := newSpanBatchTx(tx)
+		if err != nil {
+			return err
+		}
+		txData, err := stx.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		sbtx.txDatas = append(sbtx.txDatas, txData)
+		sbtx.txTypes = append(sbtx.txTypes, int(tx.Type()))
+	}
+	sbtx.totalBlockTxCount += uint64(len(txs))
+	return nil
+}
+
+// checkPostExecSlots enforces the span batch slot values the Lagoon spec fixes for a
+// post-exec (0x7D) transaction: the zero-to bit is set, so no tx_tos entry is
+// consumed, and the signature, nonce and gas slots are zero, because a post-exec
+// transaction has no such fields to transpose.
+//
+// This is a decode-side rule and it has to live here. The slots are discarded when the
+// transaction is reconstructed, so no later stage can notice a batcher that filled them
+// with something else, and a block that derives identically either way would have more
+// than one valid span batch encoding. Contrast the block-level structural rules (at most
+// one post-exec transaction, last in its block): those are checked when the derived block
+// is validated, and this decoder deliberately leaves them alone, because rejecting them
+// here would skip the deposit-only replacement and derive a different chain.
+//
+// A violation invalidates the whole span batch: these slots are positional across the
+// span, so it cannot be attributed to the one block whose transaction carries it.
+func (btx *spanBatchTxs) checkPostExecSlots() error {
+	for idx, txType := range btx.txTypes {
+		if txType != optypes.PostExecTxType {
+			continue
+		}
+		if idx >= len(btx.txSigs) || idx >= len(btx.txNonces) || idx >= len(btx.txGases) {
+			return fmt.Errorf("post-exec tx at index %d: span batch slot arrays are short", idx)
+		}
+		if btx.zeroToBits.Bit(idx) != 1 {
+			return fmt.Errorf("post-exec tx at index %d must set the zero-to bit", idx)
+		}
+		if btx.yParityBits.Bit(idx) != 0 {
+			return fmt.Errorf("post-exec tx at index %d must have a zero y parity bit", idx)
+		}
+		if !btx.txSigs[idx].r.IsZero() || !btx.txSigs[idx].s.IsZero() {
+			return fmt.Errorf("post-exec tx at index %d must have a zero signature", idx)
+		}
+		if btx.txNonces[idx] != 0 {
+			return fmt.Errorf("post-exec tx at index %d must have a zero nonce", idx)
+		}
+		if btx.txGases[idx] != 0 {
+			return fmt.Errorf("post-exec tx at index %d must have a zero gas limit", idx)
+		}
+	}
+	return nil
+}
+
+// addPostExecTx appends the span batch fields of a post-exec (0x7D) transaction
+// at position idx of the span. Post-exec transactions are synthetic and unsigned:
+// they carry no signature, nonce, gas or recipient, so every transposed envelope
+// field is zero and only the opaque payload is stored. Deriving the fields from
+// the canonical encoding keeps the span batch encoder off go-ethereum's typed
+// transaction decoding, which does not know the OP Stack transaction classes.
+func (sbtx *spanBatchTxs) addPostExecTx(rawTx []byte, idx int) error {
+	postExecTx, err := optypes.UnmarshalPostExecTx(rawTx)
+	if err != nil {
+		return fmt.Errorf("failed to decode post-exec tx: %w", err)
+	}
+	stx := &spanBatchTx{inner: &spanBatchPostExecTxData{Data: postExecTx.Data}}
+	txData, err := stx.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	sbtx.txSigs = append(sbtx.txSigs, spanBatchSignature{v: new(big.Int), r: new(uint256.Int), s: new(uint256.Int)})
+	// No recipient: the zero-to bit is set and no address is stored.
+	sbtx.zeroToBits.SetBit(sbtx.zeroToBits, idx, 1)
+	sbtx.yParityBits.SetBit(sbtx.yParityBits, idx, 0)
+	sbtx.txNonces = append(sbtx.txNonces, 0)
+	sbtx.txGases = append(sbtx.txGases, 0)
+	sbtx.txDatas = append(sbtx.txDatas, txData)
+	sbtx.txTypes = append(sbtx.txTypes, optypes.PostExecTxType)
+	return nil
+}
