@@ -8,7 +8,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/log"
-	"github.com/ethereum/go-ethereum/core/types"
 )
 
 type BatchWithL1InclusionBlock struct {
@@ -25,39 +24,10 @@ const (
 	BatchAccept
 	// BatchUndecided indicates we are lacking L1 information until we can proceed batch filtering
 	BatchUndecided
-	// BatchFuture indicates that the batch may be valid, but cannot be processed yet and should be checked again later
-	BatchFuture
 	// BatchPast indicates that the batch is from the past, i.e. its timestamp is smaller or equal
 	// to the safe head's timestamp.
 	BatchPast
 )
-
-// CheckBatch checks if the given batch can be applied on top of the given l2SafeHead, given the contextual L1 blocks the batch was included in.
-// The first entry of the l1Blocks should match the origin of the l2SafeHead. One or more consecutive l1Blocks should be provided.
-// In case of only a single L1 block, the decision whether a batch is valid may have to stay undecided.
-func CheckBatch(ctx context.Context, cfg *rollup.Config, log log.Logger, l1Blocks []eth.L1BlockRef,
-	l2SafeHead eth.L2BlockRef, batch *BatchWithL1InclusionBlock, l2Fetcher SafeBlockFetcher,
-) BatchValidity {
-	switch typ := batch.GetBatchType(); typ {
-	case SingularBatchType:
-		singularBatch, ok := batch.AsSingularBatch()
-		if !ok {
-			log.Error("failed type assertion to SingularBatch")
-			return BatchDrop
-		}
-		return checkSingularBatch(cfg, log, l1Blocks, l2SafeHead, singularBatch, batch.L1InclusionBlock)
-	case SpanBatchType:
-		spanBatch, ok := batch.AsSpanBatch()
-		if !ok {
-			log.Error("failed type assertion to SpanBatch")
-			return BatchDrop
-		}
-		return checkSpanBatch(ctx, cfg, log, l1Blocks, l2SafeHead, spanBatch, batch.L1InclusionBlock, l2Fetcher)
-	default:
-		log.Warn("Unrecognized batch type: %d", typ)
-		return BatchDrop
-	}
-}
 
 // checkSingularBatch implements SingularBatch validation rule.
 func checkSingularBatch(cfg *rollup.Config, log log.Logger, l1Blocks []eth.L1BlockRef, l2SafeHead eth.L2BlockRef, batch *SingularBatch, l1InclusionBlock eth.L1BlockRef) BatchValidity {
@@ -73,19 +43,12 @@ func checkSingularBatch(cfg *rollup.Config, log log.Logger, l1Blocks []eth.L1Blo
 
 	nextTimestamp := l2SafeHead.Time + cfg.BlockTime
 	if batch.Timestamp > nextTimestamp {
-		if cfg.IsHolocene(l1InclusionBlock.Time) {
-			log.Warn("dropping future batch", "next_timestamp", nextTimestamp)
-			return BatchDrop
-		}
-		log.Trace("received out-of-order batch for future processing after next batch", "next_timestamp", nextTimestamp)
-		return BatchFuture
+		log.Warn("dropping future batch", "next_timestamp", nextTimestamp)
+		return BatchDrop
 	}
 	if batch.Timestamp < nextTimestamp {
 		log.Warn("dropping past batch with old timestamp", "min_timestamp", nextTimestamp)
-		if cfg.IsHolocene(l1InclusionBlock.Time) {
-			return BatchPast
-		}
-		return BatchDrop
+		return BatchPast
 	}
 
 	// dependent on above timestamp check. If the timestamp is correct, then it must build on top of the safe head.
@@ -134,15 +97,6 @@ func checkSingularBatch(cfg *rollup.Config, log log.Logger, l1Blocks []eth.L1Blo
 		return BatchDrop
 	}
 
-	// Future forks that contain upgrade transactions must be added here.
-	if (cfg.IsJovianActivationBlock(batch.Timestamp) ||
-		cfg.IsKarstActivationBlock(batch.Timestamp) ||
-		cfg.IsInteropActivationBlock(batch.Timestamp)) &&
-		len(batch.Transactions) > 0 {
-		log.Warn("dropping batch with user transactions in fork activation block")
-		return BatchDrop
-	}
-
 	spec := rollup.NewChainSpec(cfg)
 	// Check if we ran out of sequencer time drift
 	if max := batchOrigin.Time + spec.MaxSequencerDrift(batchOrigin.Time); batch.Timestamp > max {
@@ -171,12 +125,9 @@ func checkSingularBatch(cfg *rollup.Config, log log.Logger, l1Blocks []eth.L1Blo
 		}
 	}
 
-	isIsthmus := cfg.IsIsthmus(batch.Timestamp)
-	isSDM := cfg.IsSDM(batch.Timestamp)
-
 	// We can do this check earlier, but it's a more intensive one, so we do this last.
 	for i, txBytes := range batch.Transactions {
-		if validity := checkSequencerTxData(log, i, txBytes, isIsthmus, isSDM); validity != BatchAccept {
+		if validity := checkSequencerTxData(log, i, txBytes); validity != BatchAccept {
 			return validity
 		}
 	}
@@ -184,7 +135,7 @@ func checkSingularBatch(cfg *rollup.Config, log log.Logger, l1Blocks []eth.L1Blo
 	return BatchAccept
 }
 
-func checkSequencerTxData(log log.Logger, txIndex int, txBytes []byte, isIsthmus, isSDM bool) BatchValidity {
+func checkSequencerTxData(log log.Logger, txIndex int, txBytes []byte) BatchValidity {
 	if len(txBytes) == 0 {
 		log.Warn("transaction data must not be empty, but found empty tx", "tx_index", txIndex)
 		return BatchDrop
@@ -193,22 +144,14 @@ func checkSequencerTxData(log log.Logger, txIndex int, txBytes []byte, isIsthmus
 	case optypes.DepositTxType:
 		log.Warn("sequencers may not embed any deposits into batch data, but found tx that has one", "tx_index", txIndex)
 		return BatchDrop
-	case types.SetCodeTxType:
-		if !isIsthmus {
-			log.Warn("sequencers may not embed any SetCode transactions before Isthmus", "tx_index", txIndex)
-			return BatchDrop
-		}
 	case optypes.PostExecTxType:
-		if !isSDM {
-			log.Warn("sequencers may not embed any PostExec transactions before SDM", "tx_index", txIndex)
-			return BatchDrop
-		}
+		log.Warn("sequencers may not embed any PostExec transactions", "tx_index", txIndex)
+		return BatchDrop
 	}
 	return BatchAccept
 }
 
-// checkSpanBatchPrefix performs the span batch prefix rules shared by the legacy full checks and
-// the Holocene checks. It also returns the parent L2 block determined during validation.
+// checkSpanBatchPrefix performs the span batch prefix rules. It also returns the parent L2 block determined during validation.
 func checkSpanBatchPrefix(ctx context.Context, cfg *rollup.Config, log log.Logger, l1Blocks []eth.L1BlockRef, l2SafeHead eth.L2BlockRef,
 	batch *SpanBatch, l1InclusionBlock eth.L1BlockRef, l2Fetcher SafeBlockFetcher,
 ) (BatchValidity, eth.L2BlockRef) {
@@ -231,27 +174,15 @@ func checkSpanBatchPrefix(ctx context.Context, cfg *rollup.Config, log log.Logge
 		}
 		batchOrigin = l1Blocks[1]
 	}
-	if !cfg.IsDelta(batchOrigin.Time) {
-		log.Warn("received SpanBatch with L1 origin before Delta hard fork", "l1_origin", batchOrigin.ID(), "l1_origin_time", batchOrigin.Time)
-		return BatchDrop, eth.L2BlockRef{}
-	}
-
 	nextTimestamp := l2SafeHead.Time + cfg.BlockTime
 
 	if batch.GetTimestamp() > nextTimestamp {
-		if cfg.IsHolocene(l1InclusionBlock.Time) {
-			log.Warn("dropping future span batch", "next_timestamp", nextTimestamp)
-			return BatchDrop, eth.L2BlockRef{}
-		}
-		log.Trace("received out-of-order batch for future processing after next batch", "next_timestamp", nextTimestamp)
-		return BatchFuture, eth.L2BlockRef{}
+		log.Warn("dropping future span batch", "next_timestamp", nextTimestamp)
+		return BatchDrop, eth.L2BlockRef{}
 	}
 	if batch.GetLastTimestamp() < nextTimestamp {
 		log.Warn("span batch has no new blocks after safe head")
-		if cfg.IsHolocene(l1InclusionBlock.Time) {
-			return BatchPast, eth.L2BlockRef{}
-		}
-		return BatchDrop, eth.L2BlockRef{}
+		return BatchPast, eth.L2BlockRef{}
 	}
 
 	// finding parent block of the span batch.
@@ -320,7 +251,7 @@ func checkSpanBatchPrefix(ctx context.Context, cfg *rollup.Config, log log.Logge
 }
 
 // checkSpanBatchHolocene validates the span batch prefix followed by its overlap with the safe
-// chain. Holocene validates batches as they are loaded, so the legacy full checks are not run.
+// chain. Batches are validated as they are loaded.
 func checkSpanBatchHolocene(ctx context.Context, cfg *rollup.Config, log log.Logger, l1Blocks []eth.L1BlockRef, l2SafeHead eth.L2BlockRef,
 	batch *SpanBatch, l1InclusionBlock eth.L1BlockRef, l2Fetcher SafeBlockFetcher,
 ) BatchValidity {
@@ -329,104 +260,6 @@ func checkSpanBatchHolocene(ctx context.Context, cfg *rollup.Config, log log.Log
 		return prefixValidity
 	}
 	return checkSpanBatchOverlap(ctx, cfg, log, batch, parentBlock, l2SafeHead, l2Fetcher)
-}
-
-// checkSpanBatch checks the full SpanBatch semantic validation rules on a syntactically-correct
-// span batch.
-func checkSpanBatch(ctx context.Context, cfg *rollup.Config, log log.Logger, l1Blocks []eth.L1BlockRef, l2SafeHead eth.L2BlockRef,
-	batch *SpanBatch, l1InclusionBlock eth.L1BlockRef, l2Fetcher SafeBlockFetcher,
-) BatchValidity {
-	prefixValidity, parentBlock := checkSpanBatchPrefix(ctx, cfg, log, l1Blocks, l2SafeHead, batch, l1InclusionBlock, l2Fetcher)
-	if prefixValidity != BatchAccept {
-		return prefixValidity
-	}
-
-	startEpochNum := uint64(batch.GetStartEpochNum())
-
-	originIdx := 0
-	originAdvanced := startEpochNum == parentBlock.L1Origin.Number+1
-
-	for i := 0; i < batch.GetBlockCount(); i++ {
-		blockTimestamp := batch.GetBlockTimestamp(i)
-		blockEpoch := batch.GetBlockEpochNum(i)
-
-		if blockTimestamp <= l2SafeHead.Time {
-			continue
-		}
-		if blockEpoch < l2SafeHead.L1Origin.Number {
-			log.Warn("block epoch is too old", "minimum", l2SafeHead.ID(), "have", blockEpoch)
-			return BatchDrop
-		}
-		var l1Origin eth.L1BlockRef
-		var originFound bool
-		for j := originIdx; j < len(l1Blocks); j++ {
-			if blockEpoch == l1Blocks[j].Number {
-				l1Origin = l1Blocks[j]
-				originIdx = j
-				originFound = true
-				break
-			}
-		}
-		if !originFound {
-			log.Info("unable to find L1 origin for batch", "epoch", blockEpoch, "timestamp", blockTimestamp)
-			return BatchDrop
-		}
-		if i > 0 {
-			originAdvanced = false
-			if blockEpoch > batch.GetBlockEpochNum(i-1) {
-				originAdvanced = true
-			}
-		}
-		if blockTimestamp < l1Origin.Time {
-			log.Warn("block timestamp is less than L1 origin timestamp", "l2_timestamp", blockTimestamp, "l1_timestamp", l1Origin.Time, "origin", l1Origin.ID())
-			return BatchDrop
-		}
-
-		spec := rollup.NewChainSpec(cfg)
-		// Check if we ran out of sequencer time drift
-		if max := l1Origin.Time + spec.MaxSequencerDrift(l1Origin.Time); blockTimestamp > max {
-			if len(batch.GetBlockTransactions(i)) == 0 {
-				// If the sequencer is co-operating by producing an empty batch,
-				// then allow the batch if it was the right thing to do to maintain the L2 time >= L1 time invariant.
-				// We only check batches that do not advance the epoch, to ensure epoch advancement regardless of time drift is allowed.
-				if !originAdvanced {
-					if originIdx+1 >= len(l1Blocks) {
-						log.Info("without the next L1 origin we cannot determine yet if this empty batch that exceeds the time drift is still valid")
-						return BatchUndecided
-					}
-					if blockTimestamp >= l1Blocks[originIdx+1].Time { // check if the next L1 origin could have been adopted
-						log.Info("batch exceeded sequencer time drift without adopting next origin, and next L1 origin would have been valid")
-						return BatchDrop
-					} else {
-						log.Info("continuing with empty batch before late L1 block to preserve L2 time invariant")
-					}
-				}
-			} else {
-				// If the sequencer is ignoring the time drift rule, then drop the batch and force an empty batch instead,
-				// as the sequencer is not allowed to include anything past this point without moving to the next epoch.
-				log.Warn("batch exceeded sequencer time drift, sequencer must adopt new L1 origin to include transactions again", "max_time", max)
-				return BatchDrop
-			}
-		}
-
-		isIsthmus := cfg.IsIsthmus(blockTimestamp)
-		isSDM := cfg.IsSDM(blockTimestamp)
-		for i, txBytes := range batch.GetBlockTransactions(i) {
-			if validity := checkSequencerTxData(log, i, txBytes, isIsthmus, isSDM); validity != BatchAccept {
-				return validity
-			}
-		}
-	}
-
-	nextTimestamp := l2SafeHead.Time + cfg.BlockTime
-	// Check overlapped blocks
-	if batch.GetTimestamp() < nextTimestamp {
-		if validity := checkSpanBatchOverlap(ctx, cfg, log, batch, parentBlock, l2SafeHead, l2Fetcher); validity != BatchAccept {
-			return validity
-		}
-	}
-
-	return BatchAccept
 }
 
 // checkSpanBatchOverlap validates the portion of a span batch that overlaps the safe chain: every

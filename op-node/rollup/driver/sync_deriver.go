@@ -153,14 +153,6 @@ func (s *SyncDeriver) SyncStep() {
 		return
 	}
 
-	if s.SyncCfg.FollowSourceEnabled() {
-		if s.SyncCfg.NeedInitialResetEngine {
-			// May need a single reset to trigger sequencer block building
-			s.Engine.TryInitialResetEngineForSequencer(s.Ctx)
-		}
-		return
-	}
-
 	// Any now processed forkchoice updates will trigger CL-sync payload processing, if any payload is queued up.
 
 	// Since we don't force attributes to be processed at this point,

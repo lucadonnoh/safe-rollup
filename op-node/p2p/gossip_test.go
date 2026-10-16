@@ -3,7 +3,6 @@ package p2p
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
 	"fmt"
 	"io"
 	"math/big"
@@ -16,10 +15,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/clock"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/log"
-	"github.com/ethereum-optimism/optimism/op-service/ptr"
 	opsigner "github.com/ethereum-optimism/optimism/op-service/signer"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
-	"github.com/ethereum-optimism/optimism/op-service/testutils"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -53,11 +50,6 @@ func TestGuardGossipValidator(t *testing.T) {
 	require.Equal(t, pubsub.ValidationIgnore, val(context.Background(), "bob", nil))
 }
 
-func TestCombinePeers(t *testing.T) {
-	res := combinePeers([]peer.ID{"foo", "bar"}, []peer.ID{"bar", "baz"})
-	require.Equal(t, []peer.ID{"foo", "bar", "baz"}, res)
-}
-
 func TestVerifyBlockSignature(t *testing.T) {
 	logger := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
@@ -69,7 +61,7 @@ func TestVerifyBlockSignature(t *testing.T) {
 	msg := []byte("any msg")
 
 	t.Run("Valid", func(t *testing.T) {
-		runCfg := &testutils.MockRuntimeConfig{P2PSeqAddress: crypto.PubkeyToAddress(secrets.PublicKey)}
+		runCfg := SequencerAddress(crypto.PubkeyToAddress(secrets.PublicKey))
 		signer := &PreparedSigner{Signer: opsigner.NewLocalSigner(secrets)}
 		sig, err := signer.SignBlockV1(context.Background(), eth.ChainIDFromBig(cfg.L2ChainID), opsigner.PayloadHash(msg))
 		require.NoError(t, err)
@@ -78,7 +70,7 @@ func TestVerifyBlockSignature(t *testing.T) {
 	})
 
 	t.Run("WrongSigner", func(t *testing.T) {
-		runCfg := &testutils.MockRuntimeConfig{P2PSeqAddress: common.HexToAddress("0x1234")}
+		runCfg := SequencerAddress(common.HexToAddress("0x1234"))
 		signer := &PreparedSigner{Signer: opsigner.NewLocalSigner(secrets)}
 		sig, err := signer.SignBlockV1(context.Background(), eth.ChainIDFromBig(cfg.L2ChainID), opsigner.PayloadHash(msg))
 		require.NoError(t, err)
@@ -87,60 +79,20 @@ func TestVerifyBlockSignature(t *testing.T) {
 	})
 
 	t.Run("InvalidSignature", func(t *testing.T) {
-		runCfg := &testutils.MockRuntimeConfig{P2PSeqAddress: crypto.PubkeyToAddress(secrets.PublicKey)}
+		runCfg := SequencerAddress(crypto.PubkeyToAddress(secrets.PublicKey))
 		sig := eth.Bytes65{}
 		result := verifyBlockSignature(logger, cfg, runCfg, peerId, sig, msg)
 		require.Equal(t, pubsub.ValidationReject, result)
 	})
 
 	t.Run("NoSequencer", func(t *testing.T) {
-		runCfg := &testutils.MockRuntimeConfig{}
+		runCfg := SequencerAddress{}
 		signer := &PreparedSigner{Signer: opsigner.NewLocalSigner(secrets)}
 		sig, err := signer.SignBlockV1(context.Background(), eth.ChainIDFromBig(cfg.L2ChainID), opsigner.PayloadHash(msg))
 		require.NoError(t, err)
 		result := verifyBlockSignature(logger, cfg, runCfg, peerId, sig, msg)
 		require.Equal(t, pubsub.ValidationIgnore, result)
 	})
-
-	// Grace period tests: when the signer rotates, blocks from the previous signer
-	// should still be accepted during the grace period.
-	newSecrets, err := crypto.GenerateKey()
-	require.NoError(t, err)
-	thirdSecrets, err := crypto.GenerateKey()
-	require.NoError(t, err)
-
-	secretsAddr := crypto.PubkeyToAddress(secrets.PublicKey)
-	newAddr := crypto.PubkeyToAddress(newSecrets.PublicKey)
-
-	gracePeriodTests := []struct {
-		name        string
-		current     common.Address
-		prev        common.Address
-		signWith    *ecdsa.PrivateKey
-		wantResult  pubsub.ValidationResult
-		wantConfirm bool
-	}{
-		{"PreviousSignerAccepted", newAddr, secretsAddr, secrets, pubsub.ValidationAccept, false},
-		{"NewSignerConfirms", newAddr, secretsAddr, newSecrets, pubsub.ValidationAccept, true},
-		{"GracePeriodExpired", newAddr, common.Address{}, secrets, pubsub.ValidationReject, false},
-		{"ThirdPartySignerRejected", newAddr, secretsAddr, thirdSecrets, pubsub.ValidationReject, false},
-		{"ValidNoGracePeriod", secretsAddr, common.Address{}, secrets, pubsub.ValidationAccept, true},
-	}
-
-	for _, tc := range gracePeriodTests {
-		t.Run(tc.name, func(t *testing.T) {
-			runCfg := &testutils.MockRuntimeConfig{
-				P2PSeqAddress:     tc.current,
-				PrevP2PSeqAddress: tc.prev,
-			}
-			signer := &PreparedSigner{Signer: opsigner.NewLocalSigner(tc.signWith)}
-			sig, err := signer.SignBlockV1(context.Background(), eth.ChainIDFromBig(cfg.L2ChainID), opsigner.PayloadHash(msg))
-			require.NoError(t, err)
-			result := verifyBlockSignature(logger, cfg, runCfg, peerId, sig, msg)
-			require.Equal(t, tc.wantResult, result)
-			require.Equal(t, tc.wantConfirm, runCfg.Confirmed)
-		})
-	}
 }
 
 type MarshalSSZ interface {
@@ -191,7 +143,7 @@ func TestBlockValidator(t *testing.T) {
 	}
 	secrets, err := crypto.GenerateKey()
 	require.NoError(t, err)
-	runCfg := &testutils.MockRuntimeConfig{P2PSeqAddress: crypto.PubkeyToAddress(secrets.PublicKey)}
+	runCfg := SequencerAddress(crypto.PubkeyToAddress(secrets.PublicKey))
 	signer := &PreparedSigner{Signer: opsigner.NewLocalSigner(secrets)}
 	// Params Set 2: Call the validation function
 	peerID := peer.ID("foo")
@@ -201,11 +153,6 @@ func TestBlockValidator(t *testing.T) {
 	v2Validator := BuildBlocksValidator(testlog.Logger(t, log.LevelCrit), cfg, runCfg, eth.BlockV2, mockGossipConf, clock.SystemClock)
 	v3Validator := BuildBlocksValidator(testlog.Logger(t, log.LevelCrit), cfg, runCfg, eth.BlockV3, mockGossipConf, clock.SystemClock)
 	v4Validator := BuildBlocksValidator(testlog.Logger(t, log.LevelDebug), cfg, runCfg, eth.BlockV4, mockGossipConf, clock.SystemClock)
-	jovianCfg := &rollup.Config{
-		L2ChainID:  big.NewInt(100),
-		JovianTime: ptr.New(uint64(0)),
-	}
-	v4JovianValidator := BuildBlocksValidator(testlog.Logger(t, log.LevelCrit), jovianCfg, runCfg, eth.BlockV4, mockGossipConf, clock.SystemClock)
 
 	zero, one := uint64(0), uint64(1)
 	beaconHash, withdrawalsRoot := common.HexToHash("0x1234"), common.HexToHash("0x9876")
@@ -241,11 +188,10 @@ func TestBlockValidator(t *testing.T) {
 		payload   *eth.ExecutionPayloadEnvelope
 	}{
 		{"V3RejectNonZeroExcessGas", v3Validator, pubsub.ValidationReject, createEnvelope(&beaconHash, types.Withdrawals{}, nil, &one, &zero)},
-		{"V3RejectNonZeroBlobGasUsed", v3Validator, pubsub.ValidationReject, createEnvelope(&beaconHash, types.Withdrawals{}, nil, &zero, &one)},
 		{"V3Valid", v3Validator, pubsub.ValidationAccept, createEnvelope(&beaconHash, types.Withdrawals{}, nil, &zero, &zero)},
 		{"V4Valid", v4Validator, pubsub.ValidationAccept, createEnvelope(&beaconHash, types.Withdrawals{}, &withdrawalsRoot, &zero, &zero)},
 		{"V4RejectNoWithdrawalRoot", v4Validator, pubsub.ValidationReject, createEnvelope(&beaconHash, types.Withdrawals{}, nil, &zero, &zero)},
-		{"V4AcceptNonZeroBlobGasUsedJovian", v4JovianValidator, pubsub.ValidationAccept, createEnvelope(&beaconHash, types.Withdrawals{}, &withdrawalsRoot, &zero, &one)},
+		{"V4AcceptNonZeroBlobGasUsed", v4Validator, pubsub.ValidationAccept, createEnvelope(&beaconHash, types.Withdrawals{}, &withdrawalsRoot, &zero, &one)},
 		// Note: v3+ test cases with nil blobGasUsed cannot easily be included because they already fail at the SSZ marshaling stage.
 	}
 
@@ -268,7 +214,7 @@ func TestGossipTimestampThreshold(t *testing.T) {
 	}
 	secrets, err := crypto.GenerateKey()
 	require.NoError(t, err)
-	runCfg := &testutils.MockRuntimeConfig{P2PSeqAddress: crypto.PubkeyToAddress(secrets.PublicKey)}
+	runCfg := SequencerAddress(crypto.PubkeyToAddress(secrets.PublicKey))
 	signer := &PreparedSigner{Signer: opsigner.NewLocalSigner(secrets)}
 	peerID := peer.ID("foo")
 

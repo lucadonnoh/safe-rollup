@@ -46,9 +46,8 @@ type SequencerEngine interface {
 
 	// ProcessPayload inserts a payload via NewPayload, updates the unsafe head, and
 	// finalizes via forkchoice update, emitting UnsafeUpdateEvent on success.
-	// Errors: engine.ErrStaleBuild if the payload no longer extends the unsafe head
-	// and engine.ErrPayloadDenied if the SuperAuthority denied it, both emitting
-	// nothing; engine.ErrPayloadInvalid if the engine rejected the block; otherwise
+	// Errors: engine.ErrStaleBuild if the payload no longer extends the unsafe head,
+	// emitting nothing; engine.ErrPayloadInvalid if the engine rejected the block; otherwise
 	// a temporary failure whose EngineTemporaryErrorEvent has been emitted.
 	ProcessPayload(ctx context.Context, envelope *eth.ExecutionPayloadEnvelope, ref eth.L2BlockRef, buildStarted time.Time) error
 }

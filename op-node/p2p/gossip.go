@@ -64,33 +64,23 @@ type GossipSetupConfigurables interface {
 	GetGossipTimestampThreshold() time.Duration
 }
 
+// GossipRuntimeConfig provides the address that signs unsafe blocks. The operator configures it
+// offchain; there is no signer slot on L1.
 type GossipRuntimeConfig interface {
 	P2PSequencerAddress() common.Address
-	// PreviousP2PSequencerAddress returns the previous signer address during a grace period
-	// after a signer rotation. Returns zero address if no grace period is active.
-	PreviousP2PSequencerAddress() common.Address
-	// ConfirmCurrentSigner signals that a block from the current signer has been verified,
-	// ending the grace period for the previous signer.
-	ConfirmCurrentSigner()
 }
+
+// SequencerAddress is a fixed unsafe-block signer.
+type SequencerAddress common.Address
+
+func (a SequencerAddress) P2PSequencerAddress() common.Address { return common.Address(a) }
 
 //go:generate mockery --name GossipMetricer
 type GossipMetricer interface {
 	RecordGossipEvent(evType int32)
 }
 
-func blocksTopicV1(cfg *rollup.Config) string {
-	return fmt.Sprintf("/optimism/%s/0/blocks", cfg.L2ChainID.String())
-}
-
-func blocksTopicV2(cfg *rollup.Config) string {
-	return fmt.Sprintf("/optimism/%s/1/blocks", cfg.L2ChainID.String())
-}
-
-func blocksTopicV3(cfg *rollup.Config) string {
-	return fmt.Sprintf("/optimism/%s/2/blocks", cfg.L2ChainID.String())
-}
-
+// blocksTopicV4 is the Isthmus block topic, the only one the chain uses.
 func blocksTopicV4(cfg *rollup.Config) string {
 	return fmt.Sprintf("/optimism/%s/3/blocks", cfg.L2ChainID.String())
 }
@@ -98,12 +88,7 @@ func blocksTopicV4(cfg *rollup.Config) string {
 // BuildSubscriptionFilter builds a simple subscription filter,
 // to help protect against peers spamming useless subscriptions.
 func BuildSubscriptionFilter(cfg *rollup.Config) pubsub.SubscriptionFilter {
-	return pubsub.NewAllowlistSubscriptionFilter(
-		blocksTopicV1(cfg),
-		blocksTopicV2(cfg),
-		blocksTopicV3(cfg),
-		blocksTopicV4(cfg), // add more topics here in the future, if any.
-	)
+	return pubsub.NewAllowlistSubscriptionFilter(blocksTopicV4(cfg))
 }
 
 var msgBufPool = sync.Pool{New: func() any {
@@ -408,10 +393,6 @@ func BuildBlocksValidator(log log.Logger, cfg *rollup.Config, runCfg GossipRunti
 				log.Warn("payload is on v3 topic, but has nil blob gas used", "bad_hash", payload.BlockHash.String())
 				return pubsub.ValidationReject
 				// [REJECT] if the block is on a topic >= V3 and has a non-zero blob gas used field pre-Jovian
-			} else if !cfg.IsJovian(uint64(payload.Timestamp)) && *payload.BlobGasUsed != 0 {
-				log.Warn("payload is on v3 topic, but has non-zero blob gas used",
-					"bad_hash", payload.BlockHash.String(), "blob_gas_used", *payload.BlobGasUsed)
-				return pubsub.ValidationReject
 			}
 
 			// [REJECT] if the block is on a topic >= V3 and has an excess blob gas value that is not zero
@@ -474,28 +455,11 @@ func verifyBlockSignature(log log.Logger, cfg *rollup.Config, runCfg GossipRunti
 	}
 
 	authCtx := &opsigner.OPStackP2PBlockAuthV1{Allowed: currentAddr, Chain: chain}
-	currentErr := block.VerifySignature(authCtx)
-	if currentErr == nil {
-		runCfg.ConfirmCurrentSigner()
-		return pubsub.ValidationAccept
+	if err := block.VerifySignature(authCtx); err != nil {
+		log.Warn("invalid block signature", "peer", id, "err", err)
+		return pubsub.ValidationReject
 	}
-
-	// Current signer didn't match — try previous signer during grace period
-	var prevErr error
-	if prevAddr := runCfg.PreviousP2PSequencerAddress(); prevAddr != (common.Address{}) {
-		prevAuthCtx := &opsigner.OPStackP2PBlockAuthV1{Allowed: prevAddr, Chain: chain}
-		prevErr = block.VerifySignature(prevAuthCtx)
-		if prevErr == nil {
-			log.Info("accepted block from previous signer during grace period", "peer", id, "previous_signer", prevAddr)
-			return pubsub.ValidationAccept
-		}
-	}
-
-	// Neither the current nor previous signer verified the block.
-	// Log both errors so operators can distinguish between malformed signatures
-	// and legitimate signer-rotation mismatches.
-	log.Warn("invalid block signature", "peer", id, "current_err", currentErr, "previous_err", prevErr)
-	return pubsub.ValidationReject
+	return pubsub.ValidationAccept
 }
 
 type GossipIn interface {
@@ -504,10 +468,6 @@ type GossipIn interface {
 
 type GossipTopicInfo interface {
 	AllBlockTopicsPeers() []peer.ID
-	BlocksTopicV1Peers() []peer.ID
-	BlocksTopicV2Peers() []peer.ID
-	BlocksTopicV3Peers() []peer.ID
-	BlocksTopicV4Peers() []peer.ID
 }
 
 type GossipOut interface {
@@ -541,9 +501,6 @@ type publisher struct {
 	// thus we have to stop it ourselves this way.
 	p2pCancel context.CancelFunc
 
-	blocksV1 *blockTopic
-	blocksV2 *blockTopic
-	blocksV3 *blockTopic
 	blocksV4 *blockTopic
 
 	runCfg GossipRuntimeConfig
@@ -551,43 +508,7 @@ type publisher struct {
 
 var _ GossipOut = (*publisher)(nil)
 
-func combinePeers(allPeers ...[]peer.ID) []peer.ID {
-	seen := make(map[peer.ID]bool)
-	var res []peer.ID
-	for _, peers := range allPeers {
-		for _, p := range peers {
-			if _, ok := seen[p]; ok {
-				continue
-			}
-			res = append(res, p)
-			seen[p] = true
-		}
-	}
-	return res
-}
-
 func (p *publisher) AllBlockTopicsPeers() []peer.ID {
-	return combinePeers(
-		p.BlocksTopicV1Peers(),
-		p.BlocksTopicV2Peers(),
-		p.BlocksTopicV3Peers(),
-		p.BlocksTopicV4Peers(),
-	)
-}
-
-func (p *publisher) BlocksTopicV1Peers() []peer.ID {
-	return p.blocksV1.topic.ListPeers()
-}
-
-func (p *publisher) BlocksTopicV2Peers() []peer.ID {
-	return p.blocksV2.topic.ListPeers()
-}
-
-func (p *publisher) BlocksTopicV3Peers() []peer.ID {
-	return p.blocksV3.topic.ListPeers()
-}
-
-func (p *publisher) BlocksTopicV4Peers() []peer.ID {
 	return p.blocksV4.topic.ListPeers()
 }
 
@@ -654,17 +575,7 @@ func (p *publisher) publishRawSignedPayload(ctx context.Context, timestamp uint6
 	// This also copies the data, freeing up the original buffer to go back into the pool
 	out := snappy.Encode(nil, data)
 
-	var err error
-	switch {
-	case p.cfg.IsIsthmus(timestamp):
-		err = p.blocksV4.topic.Publish(ctx, out)
-	case p.cfg.IsEcotone(timestamp):
-		err = p.blocksV3.topic.Publish(ctx, out)
-	case p.cfg.IsCanyon(timestamp):
-		err = p.blocksV2.topic.Publish(ctx, out)
-	default:
-		err = p.blocksV1.topic.Publish(ctx, out)
-	}
+	err := p.blocksV4.topic.Publish(ctx, out)
 	// A closed topic never reopens, so a retry cannot help. Deliberately narrow:
 	// Topic.Publish also surfaces the caller's context error, and a publish that
 	// merely timed out must stay retryable.
@@ -676,37 +587,11 @@ func (p *publisher) publishRawSignedPayload(ctx context.Context, timestamp uint6
 
 func (p *publisher) Close() error {
 	p.p2pCancel()
-	e1 := p.blocksV1.Close()
-	e2 := p.blocksV2.Close()
-	return errors.Join(e1, e2)
+	return p.blocksV4.Close()
 }
 
 func JoinGossip(self peer.ID, ps *pubsub.PubSub, log log.Logger, cfg *rollup.Config, runCfg GossipRuntimeConfig, gossipIn GossipIn, gossipConf GossipSetupConfigurables, clk clock.Clock) (GossipOut, error) {
 	p2pCtx, p2pCancel := context.WithCancel(context.Background())
-
-	v1Logger := log.New("topic", "blocksV1")
-	blocksV1Validator := guardGossipValidator(log, logValidationResult(self, "validated blockv1", v1Logger, BuildBlocksValidator(v1Logger, cfg, runCfg, eth.BlockV1, gossipConf, clk)))
-	blocksV1, err := newBlockTopic(p2pCtx, blocksTopicV1(cfg), ps, v1Logger, gossipIn, blocksV1Validator)
-	if err != nil {
-		p2pCancel()
-		return nil, fmt.Errorf("failed to setup blocks v1 p2p: %w", err)
-	}
-
-	v2Logger := log.New("topic", "blocksV2")
-	blocksV2Validator := guardGossipValidator(log, logValidationResult(self, "validated blockv2", v2Logger, BuildBlocksValidator(v2Logger, cfg, runCfg, eth.BlockV2, gossipConf, clk)))
-	blocksV2, err := newBlockTopic(p2pCtx, blocksTopicV2(cfg), ps, v2Logger, gossipIn, blocksV2Validator)
-	if err != nil {
-		p2pCancel()
-		return nil, fmt.Errorf("failed to setup blocks v2 p2p: %w", err)
-	}
-
-	v3Logger := log.New("topic", "blocksV3")
-	blocksV3Validator := guardGossipValidator(log, logValidationResult(self, "validated blockv3", v3Logger, BuildBlocksValidator(v3Logger, cfg, runCfg, eth.BlockV3, gossipConf, clk)))
-	blocksV3, err := newBlockTopic(p2pCtx, blocksTopicV3(cfg), ps, v3Logger, gossipIn, blocksV3Validator)
-	if err != nil {
-		p2pCancel()
-		return nil, fmt.Errorf("failed to setup blocks v3 p2p: %w", err)
-	}
 
 	v4Logger := log.New("topic", "blocksV4")
 	blocksV4Validator := guardGossipValidator(log, logValidationResult(self, "validated blockv4", v4Logger, BuildBlocksValidator(v4Logger, cfg, runCfg, eth.BlockV4, gossipConf, clk)))
@@ -720,9 +605,6 @@ func JoinGossip(self peer.ID, ps *pubsub.PubSub, log log.Logger, cfg *rollup.Con
 		log:       log,
 		cfg:       cfg,
 		p2pCancel: p2pCancel,
-		blocksV1:  blocksV1,
-		blocksV2:  blocksV2,
-		blocksV3:  blocksV3,
 		blocksV4:  blocksV4,
 		runCfg:    runCfg,
 	}, nil

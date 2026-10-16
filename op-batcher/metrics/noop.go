@@ -2,13 +2,10 @@ package metrics
 
 import (
 	"io"
-	"math"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 
-	"github.com/ethereum-optimism/optimism/op-batcher/config"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/log"
@@ -42,38 +39,16 @@ func (*noopMetrics) RecordChannelFullySubmitted(derive.ChannelID) {}
 func (*noopMetrics) RecordChannelTimedOut(derive.ChannelID)       {}
 func (*noopMetrics) RecordChannelQueueLength(int)                 {}
 
-func (*noopMetrics) RecordThrottleIntensity(intensity float64, controllerType config.ThrottleControllerType) {
-}
-func (*noopMetrics) RecordThrottleParams(maxTxSize, maxBlockSize uint64)                       {}
-func (*noopMetrics) RecordThrottleControllerType(controllerType config.ThrottleControllerType) {}
-func (*noopMetrics) RecordUnsafeBytesVsThreshold(pendingBytes, threshold uint64, controllerType config.ThrottleControllerType) {
-}
-
 func (*noopMetrics) RecordUnsafeDABytes(int64) {}
-
-// PID Controller specific metrics
-func (*noopMetrics) RecordThrottleControllerState(error, integral, derivative float64) {}
-func (*noopMetrics) RecordThrottleResponseTime(duration time.Duration)                 {}
 
 func (*noopMetrics) RecordBatchTxSubmitted() {}
 func (*noopMetrics) RecordBatchTxSuccess()   {}
 func (*noopMetrics) RecordBatchTxFailed()    {}
-func (*noopMetrics) RecordBlobUsedBytes(int) {}
 func (*noopMetrics) StartBalanceMetrics(log.Logger, *ethclient.Client, common.Address) io.Closer {
 	return nil
 }
 func (nm *noopMetrics) PendingDABytes() float64 {
 	return 0.0
-}
-
-// ThrottlingMetrics is a noopMetrics that always returns a max value for PendingDABytes, to use in testing batcher
-// backlog throttling.
-type ThrottlingMetrics struct {
-	noopMetrics
-}
-
-func (nm *ThrottlingMetrics) PendingDABytes() float64 {
-	return math.MaxFloat64
 }
 
 func (*noopMetrics) ClearAllStateMetrics() {}

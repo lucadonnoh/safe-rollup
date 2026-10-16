@@ -12,8 +12,3 @@ type BatcherAdminServer interface {
 	CommonAdminServer
 	BatcherActivity
 }
-
-type BatcherAdminClient interface {
-	CommonAdminClient
-	BatcherActivity
-}

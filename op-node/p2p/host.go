@@ -17,7 +17,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/metrics"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/protocol"
 	basichost "github.com/libp2p/go-libp2p/p2p/host/basic"
 	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
 	"github.com/libp2p/go-libp2p/p2p/net/swarm"
@@ -38,10 +37,6 @@ import (
 const (
 	staticPeerTag = "static"
 )
-
-type HostNewStream interface {
-	NewStream(ctx context.Context, p peer.ID, pids ...protocol.ID) (network.Stream, error)
-}
 
 type ExtraHostFeatures interface {
 	host.Host

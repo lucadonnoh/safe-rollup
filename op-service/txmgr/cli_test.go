@@ -1,8 +1,6 @@
 package txmgr
 
 import (
-	"math"
-	"math/big"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -26,7 +24,7 @@ func TestDefaultConfigIsValid(t *testing.T) {
 func configForArgs(args ...string) CLIConfig {
 	app := cli.NewApp()
 	// txmgr expects the --l1-eth-rpc option to be declared externally
-	flags := append(CLIFlagsWithBTO("TEST_"), &cli.StringFlag{
+	flags := append(CLIFlags("TEST_"), &cli.StringFlag{
 		Name:  L1RPCFlagName,
 		Value: l1EthRpcValue,
 	})
@@ -95,39 +93,6 @@ func TestCLIConfigCheck(t *testing.T) {
 			override:  func(c *CLIConfig) { c.SafeAbortNonceTooLowCount = 0 },
 			errString: "SafeAbortNonceTooLowCount must not be 0",
 		},
-		{
-			name: "BlobTipCapPercentile too low",
-			override: func(c *CLIConfig) {
-				c.BlobTipCapDynamic = true
-				c.BlobTipCapPercentile = 0
-			},
-			errString: "BlobTipCapPercentile must be between 1 and 100",
-		},
-		{
-			name: "BlobTipCapPercentile too high",
-			override: func(c *CLIConfig) {
-				c.BlobTipCapDynamic = true
-				c.BlobTipCapPercentile = 101
-			},
-			errString: "BlobTipCapPercentile must be between 1 and 100",
-		},
-		{
-			name: "BlobTipCapRange too low",
-			override: func(c *CLIConfig) {
-				c.BlobTipCapDynamic = true
-				c.BlobTipCapRange = 0
-			},
-			errString: "BlobTipCapRange must be at least 1",
-		},
-		{
-			name: "BTO validation skipped when BlobTipCapDynamic is false",
-			override: func(c *CLIConfig) {
-				c.BlobTipCapDynamic = false
-				c.BlobTipCapPercentile = 0
-				c.BlobTipCapRange = 0
-			},
-			errString: "", // No error expected
-		},
 	}
 
 	for _, tc := range tests {
@@ -142,22 +107,4 @@ func TestCLIConfigCheck(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestFallbackToOsakaCellProofTimeIfKnown(t *testing.T) {
-	// No override, but we detect the L1 is Mainnet
-	cellProofTime := fallbackToOsakaCellProofTimeIfKnown(big.NewInt(1), math.MaxUint64)
-	require.Equal(t, uint64(1764798551), cellProofTime)
-
-	// No override, but we detect the L1 is Sepolia
-	cellProofTime = fallbackToOsakaCellProofTimeIfKnown(big.NewInt(11155111), math.MaxUint64)
-	require.Equal(t, uint64(1760427360), cellProofTime)
-
-	// Override is set, so we ignore known L1 config and use the override
-	cellProofTime = fallbackToOsakaCellProofTimeIfKnown(big.NewInt(1), 654321)
-	require.Equal(t, uint64(654321), cellProofTime)
-
-	// No override set, but L1 Network is not known, so we never use cell proofs
-	cellProofTime = fallbackToOsakaCellProofTimeIfKnown(big.NewInt(33), math.MaxUint64)
-	require.Equal(t, uint64(18446744073709551615), cellProofTime)
 }

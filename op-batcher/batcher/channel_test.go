@@ -131,7 +131,6 @@ func TestChannel_NextTxData_singleFrameTx(t *testing.T) {
 	const n = 6
 	lgr := testlog.Logger(t, log.LevelWarn)
 	ch, err := newChannelWithChannelOut(lgr, metrics.NoopMetrics, ChannelConfig{
-		UseBlobs:        false,
 		TargetNumFrames: n,
 		CompressorConfig: compressor.Config{
 			CompressionAlgo: derive.Zlib,
@@ -165,39 +164,6 @@ func TestChannel_NextTxData_singleFrameTx(t *testing.T) {
 		requireTxData(i)
 	}
 	require.False(ch.HasTxData())
-}
-
-func TestChannel_NextTxData_multiFrameTx(t *testing.T) {
-	require := require.New(t)
-	const n = 6
-	lgr := testlog.Logger(t, log.LevelWarn)
-	ch, err := newChannelWithChannelOut(lgr, metrics.NoopMetrics, ChannelConfig{
-		UseBlobs:        true,
-		TargetNumFrames: n,
-		CompressorConfig: compressor.Config{
-			CompressionAlgo: derive.Zlib,
-		},
-	}, &rollup.Config{}, latestL1BlockOrigin)
-	require.NoError(err)
-	chID := ch.ID()
-
-	mockframes := makeMockFrameDatas(chID, n+1)
-	// put multiple frames into channel, but less than target
-	ch.ChannelBuilder.frames = append(ch.ChannelBuilder.frames, mockframes[:n-1]...)
-	require.False(ch.HasTxData())
-
-	// put in last two
-	ch.ChannelBuilder.frames = append(ch.ChannelBuilder.frames, mockframes[n-1:n+1]...)
-	require.True(ch.HasTxData())
-	txdata := ch.NextTxData()
-	require.Len(txdata.frames, n)
-	for i := 0; i < n; i++ {
-		frame := txdata.frames[i]
-		require.Len(frame.data, 1)
-		require.EqualValues(i, frame.data[0])
-		require.Equal(frameID{chID: chID, frameNumber: uint16(i)}, frame.id)
-	}
-	require.False(ch.HasTxData(), "no tx data expected with single pending frame")
 }
 
 func makeMockFrameDatas(id derive.ChannelID, n int) []frameData {

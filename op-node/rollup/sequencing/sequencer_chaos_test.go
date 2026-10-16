@@ -307,7 +307,7 @@ func testSequencerChaosWithSeed(t *testing.T, seed int64) {
 			Time:       genesisRef.Time + (l2Head.L1Origin.Number-genesisRef.L1Origin.Number)*12,
 		}
 		// Handle sequencer time drift, by proceeding to the next L1 origin when we run out of valid time
-		if l2Head.Time+deps.cfg.BlockTime > origin.Time+deps.cfg.MaxSequencerDrift {
+		if l2Head.Time+deps.cfg.BlockTime > origin.Time+rollup.MaxSequencerDrift {
 			origin.Number += 1
 			origin.ParentHash = origin.Hash
 			origin.Hash = l1BlockHash(origin.Number)

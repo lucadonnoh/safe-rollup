@@ -18,7 +18,7 @@ type AltDADataSource struct {
 	src     DataIter
 	fetcher AltDAInputFetcher
 	// comm is the commitment whose data could not be fetched yet, retried on the next call.
-	comm altda.CommitmentData
+	comm altda.Commitment
 }
 
 func NewAltDADataSource(log log.Logger, src DataIter, fetcher AltDAInputFetcher) *AltDADataSource {
@@ -35,7 +35,7 @@ func (s *AltDADataSource) Next(ctx context.Context) (eth.Data, error) {
 			s.log.Warn("skipping inbox data that is not a DA commitment")
 			return s.Next(ctx)
 		}
-		comm, err := altda.DecodeCommitmentData(data[1:])
+		comm, err := altda.DecodeCommitment(data[1:])
 		if err != nil {
 			s.log.Warn("invalid commitment", "commitment", data, "err", err)
 			return s.Next(ctx)
@@ -43,7 +43,7 @@ func (s *AltDADataSource) Next(ctx context.Context) (eth.Data, error) {
 		s.comm = comm
 	}
 	data, err := s.fetcher.GetInput(ctx, s.comm)
-	if errors.Is(err, altda.ErrCommitmentTypeMismatch) || errors.Is(err, altda.ErrCommitmentMismatch) {
+	if errors.Is(err, altda.ErrCommitmentMismatch) {
 		s.log.Warn("skipping invalid commitment", "comm", s.comm, "err", err)
 		s.comm = nil
 		return s.Next(ctx)

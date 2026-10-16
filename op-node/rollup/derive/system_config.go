@@ -100,22 +100,15 @@ func ProcessSystemConfigUpdateLogEvent(destSysCfg *eth.SystemConfig, ev *types.L
 		destSysCfg.BatcherAddr = addr
 		return nil
 	case SystemConfigUpdateFeeScalars:
-		overhead, scalar, err := parseSystemConfigUpdateFeeScalars(ev.Data)
+		_, scalar, err := parseSystemConfigUpdateFeeScalars(ev.Data)
 		if err != nil {
 			return err
 		}
-		if rollupCfg.IsEcotone(l1Time) {
-			if err := eth.CheckEcotoneL1SystemConfigScalar(scalar); err != nil {
-				return nil // ignore invalid scalars, retain the old system-config scalar
-			}
-			// retain the scalar data in encoded form
-			destSysCfg.Scalar = scalar
-			// zero out the overhead, it will not affect the state-transition after Ecotone
-			destSysCfg.Overhead = eth.Bytes32{}
-		} else {
-			destSysCfg.Overhead = overhead
-			destSysCfg.Scalar = scalar
+		if err := eth.CheckEcotoneL1SystemConfigScalar(scalar); err != nil {
+			return nil // ignore invalid scalars, retain the old system-config scalar
 		}
+		// retain the scalar data in encoded form
+		destSysCfg.Scalar = scalar
 		return nil
 	case SystemConfigUpdateGasLimit:
 		gasLimit, err := parseSystemConfigUpdateGasLimit(ev.Data)

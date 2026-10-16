@@ -48,6 +48,7 @@ var (
 	PeerstorePathName            = "p2p.peerstore.path"
 	DiscoveryPathName            = "p2p.discovery.path"
 	SequencerP2PKeyName          = "p2p.sequencer.key"
+	P2PSequencerAddressName      = "p2p.sequencer.address"
 	GossipMeshDName              = "p2p.gossip.mesh.d"
 	GossipMeshDloName            = "p2p.gossip.mesh.lo"
 	GossipMeshDhiName            = "p2p.gossip.mesh.dhi"
@@ -342,6 +343,13 @@ func P2PFlags(envPrefix string) []cli.Flag {
 			Value:     "opnode_discovery_db",
 			EnvVars:   p2pEnv(envPrefix, "DISCOVERY_PATH"),
 			Category:  P2PCategory,
+		},
+		&cli.StringFlag{
+			Name:     P2PSequencerAddressName,
+			Usage:    "Address that signs gossiped unsafe blocks. Blocks from other signers are rejected.",
+			Required: false,
+			EnvVars:  p2pEnv(envPrefix, "SEQUENCER_ADDRESS"),
+			Category: P2PCategory,
 		},
 		&cli.StringFlag{
 			Name:     SequencerP2PKeyName,

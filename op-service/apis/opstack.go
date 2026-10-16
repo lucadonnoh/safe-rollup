@@ -29,13 +29,3 @@ type CommitAPI interface {
 	// CommitBlock processes the block, and sets it as canonical block of the chain.
 	CommitBlock(ctx context.Context, envelope *opsigner.SignedExecutionPayloadEnvelope) error
 }
-
-type PublishAPI interface {
-	PublishBlock(ctx context.Context, signed *opsigner.SignedExecutionPayloadEnvelope) error
-}
-
-type OPStackAPI interface {
-	BuildAPI
-	CommitAPI
-	PublishAPI
-}

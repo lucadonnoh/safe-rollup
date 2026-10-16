@@ -54,7 +54,7 @@ func (cr *ChannelInReader) Origin() eth.L1BlockRef {
 
 // TODO: Take full channel for better logging
 func (cr *ChannelInReader) WriteChannel(data []byte) error {
-	if f, err := BatchReader(bytes.NewBuffer(data), cr.spec.MaxRLPBytesPerChannel(cr.prev.Origin().Time), cr.cfg.IsFjord(cr.prev.Origin().Time)); err == nil {
+	if f, err := BatchReader(bytes.NewBuffer(data), rollup.MaxRLPBytesPerChannel); err == nil {
 		cr.nextBatchFn = f
 		cr.metrics.RecordChannelInputBytes(len(data))
 		return nil
@@ -109,10 +109,6 @@ func (cr *ChannelInReader) NextBatch(ctx context.Context) (Batch, error) {
 		cr.metrics.RecordDerivedBatches("singular")
 		return batch, nil
 	case SpanBatchType:
-		if origin := cr.Origin(); !cr.cfg.IsDelta(origin.Time) {
-			cr.log.Warn("dropping span batch before Delta activation", "origin", origin)
-			return nil, NotEnoughData
-		}
 		batch.Batch, err = DeriveSpanBatch(batchData, cr.cfg)
 		if err != nil {
 			if errors.Is(err, ErrCritical) {

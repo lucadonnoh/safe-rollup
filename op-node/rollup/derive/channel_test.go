@@ -196,57 +196,14 @@ func TestBatchReader(t *testing.T) {
 	testCases := []struct {
 		name      string
 		algo      CompressionAlgo
-		isFjord   bool
 		expectErr bool
 	}{
-		{
-			name:    "zlib-post-fjord",
-			algo:    Zlib,
-			isFjord: true,
-		},
-		{
-			name:    "zlib-pre-fjord",
-			algo:    Zlib,
-			isFjord: false,
-		},
-		{
-			name:    "brotli-post-fjord",
-			algo:    Brotli,
-			isFjord: true,
-		},
-		{
-			name:      "brotli-pre-fjord",
-			algo:      Brotli,
-			isFjord:   false,
-			expectErr: true, // expect an error because brotli is not supported before Fjord
-		},
-		{
-			name:    "brotli9-post-fjord",
-			algo:    Brotli9,
-			isFjord: true,
-		},
-		{
-			name:      "brotli9-pre-fjord",
-			algo:      Brotli9,
-			isFjord:   false,
-			expectErr: true, // expect an error because brotli is not supported before Fjord
-		},
-		{
-			name:    "brotli10-post-fjord",
-			algo:    Brotli10,
-			isFjord: true,
-		},
-		{
-			name:    "brotli11-post-fjord",
-			algo:    Brotli11,
-			isFjord: true,
-		},
-		{
-			name:      "zstd-post-fjord",
-			algo:      Zstd,
-			expectErr: true,
-			isFjord:   true,
-		},
+		{name: "zlib", algo: Zlib},
+		{name: "brotli", algo: Brotli},
+		{name: "brotli9", algo: Brotli9},
+		{name: "brotli10", algo: Brotli10},
+		{name: "brotli11", algo: Brotli11},
+		{name: "zstd", algo: Zstd, expectErr: true},
 	}
 
 	for _, tc := range testCases {
@@ -254,7 +211,7 @@ func TestBatchReader(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			compressor(tc.algo)(compressed, t)
-			reader, err := BatchReader(bytes.NewReader(compressed.Bytes()), 120000, tc.isFjord)
+			reader, err := BatchReader(bytes.NewReader(compressed.Bytes()), 120000)
 			if tc.expectErr {
 				require.Error(t, err)
 				return

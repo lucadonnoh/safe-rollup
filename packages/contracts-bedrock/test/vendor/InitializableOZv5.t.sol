@@ -5,7 +5,6 @@ pragma solidity 0.8.25;
 import { Test } from "test/setup/Test.sol";
 
 // Scripts
-import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
 
 // Contracts
 import { Initializable } from "@openzeppelin/contracts-v5/proxy/utils/Initializable.sol";
@@ -44,10 +43,7 @@ contract InitializerOZv5_Test is Test {
         contracts.push(
             InitializeableContract({
                 target: address(
-                    DeployUtils.create1({
-                        _name: "BaseFeeVault",
-                        _args: DeployUtils.encodeConstructor(abi.encodeCall(IFeeVault.__constructor__, ()))
-                    })
+                    vm.deployCode("BaseFeeVault.sol:BaseFeeVault")
                 ),
                 initCalldata: abi.encodeCall(IFeeVault.initialize, (address(0), 0, Types.WithdrawalNetwork.L1))
             })
@@ -57,10 +53,7 @@ contract InitializerOZv5_Test is Test {
         contracts.push(
             InitializeableContract({
                 target: address(
-                    DeployUtils.create1({
-                        _name: "OperatorFeeVault",
-                        _args: DeployUtils.encodeConstructor(abi.encodeCall(IFeeVault.__constructor__, ()))
-                    })
+                    vm.deployCode("OperatorFeeVault.sol:OperatorFeeVault")
                 ),
                 initCalldata: abi.encodeCall(IFeeVault.initialize, (address(0), 0, Types.WithdrawalNetwork.L1))
             })
@@ -70,10 +63,7 @@ contract InitializerOZv5_Test is Test {
         contracts.push(
             InitializeableContract({
                 target: address(
-                    DeployUtils.create1({
-                        _name: "SequencerFeeVault",
-                        _args: DeployUtils.encodeConstructor(abi.encodeCall(IFeeVault.__constructor__, ()))
-                    })
+                    vm.deployCode("SequencerFeeVault.sol:SequencerFeeVault")
                 ),
                 initCalldata: abi.encodeCall(IFeeVault.initialize, (address(0), 0, Types.WithdrawalNetwork.L1))
             })
@@ -83,10 +73,7 @@ contract InitializerOZv5_Test is Test {
         contracts.push(
             InitializeableContract({
                 target: address(
-                    DeployUtils.create1({
-                        _name: "L1FeeVault",
-                        _args: DeployUtils.encodeConstructor(abi.encodeCall(IFeeVault.__constructor__, ()))
-                    })
+                    vm.deployCode("L1FeeVault.sol:L1FeeVault")
                 ),
                 initCalldata: abi.encodeCall(IFeeVault.initialize, (address(0), 0, Types.WithdrawalNetwork.L1))
             })

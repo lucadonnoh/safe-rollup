@@ -20,12 +20,7 @@ import (
 func RandomL2Block(rng *rand.Rand, txCount int, t time.Time) (*types.Block, []*types.Receipt) {
 	body := types.Body{}
 	l1Block := types.NewBlock(testutils.RandomHeader(rng), &body, nil, trie.NewStackTrie(nil), types.DefaultBlockConfig)
-	rollupCfg := rollup.Config{}
-	if testutils.RandomBool(rng) {
-		t := uint64(0)
-		rollupCfg.RegolithTime = &t
-	}
-	l1InfoTx, err := derive.L1InfoDeposit(&rollupCfg, params.MergedTestChainConfig, eth.SystemConfig{}, 0, eth.BlockToInfo(l1Block), 0)
+	l1InfoTx, err := derive.L1InfoDeposit(params.MergedTestChainConfig, eth.SystemConfig{}, 0, eth.BlockToInfo(l1Block))
 	if err != nil {
 		panic("L1InfoDeposit: " + err.Error())
 	}

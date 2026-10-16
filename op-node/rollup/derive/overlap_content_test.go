@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/log"
@@ -28,12 +27,10 @@ func TestBatchStage_OverlapContent(t *testing.T) {
 		Genesis: rollup.Genesis{
 			L2Time: 20,
 		},
-		BlockTime:         2,
-		MaxSequencerDrift: 600,
-		SeqWindowSize:     1000,
-		L2ChainID:         chainId,
+		BlockTime:     2,
+		SeqWindowSize: 1000,
+		L2ChainID:     chainId,
 	}
-	cfg.ActivateAtGenesis(forks.Delta)
 
 	parentBatch := b(cfg.L2ChainID, 20, l1[0])
 	parentRef := singularBatchToBlockRef(t, parentBatch, 0)

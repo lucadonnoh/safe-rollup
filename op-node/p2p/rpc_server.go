@@ -191,10 +191,7 @@ func (s *APIBackend) PeerStats(_ context.Context) (*apis.PeerStats, error) {
 	stats := &apis.PeerStats{
 		Connected:     uint(len(nw.Peers())),
 		Table:         0,
-		BlocksTopic:   uint(len(s.node.GossipOut().BlocksTopicV1Peers())),
-		BlocksTopicV2: uint(len(s.node.GossipOut().BlocksTopicV2Peers())),
-		BlocksTopicV3: uint(len(s.node.GossipOut().BlocksTopicV3Peers())),
-		BlocksTopicV4: uint(len(s.node.GossipOut().BlocksTopicV4Peers())),
+		BlocksTopicV4: uint(len(s.node.GossipOut().AllBlockTopicsPeers())),
 		Banned:        0,
 		Known:         uint(len(pstore.Peers())),
 	}

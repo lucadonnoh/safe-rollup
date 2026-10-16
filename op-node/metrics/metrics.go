@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-node/p2p/store"
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	ophttp "github.com/ethereum-optimism/optimism/op-service/httputil"
 	"github.com/ethereum-optimism/optimism/op-service/metrics"
 
@@ -28,14 +27,10 @@ const Namespace = "op_node"
 
 type Metricer interface {
 	RecordInfo(version string)
-	RecordHardforkActivationTimes(cfg *rollup.Config)
 	RecordUp()
 	SetDerivationIdle(status bool)
 	SetSequencerState(active bool)
 	RecordPipelineReset()
-	RecordFollowSourceRequest(result string)
-	RecordFollowSourceReorg(action string)
-	RecordSuperAuthorityReorgSignal(reason string)
 	RecordSequencingError()
 	RecordPublishingError()
 	RecordDroppedPublish()
@@ -81,19 +76,13 @@ type Metricer interface {
 
 // Metrics tracks all the metrics for the op-node.
 type Metrics struct {
-	Info                   *prometheus.GaugeVec
-	Up                     prometheus.Gauge
-	HardforkActivationTime *prometheus.GaugeVec
+	Info *prometheus.GaugeVec
+	Up   prometheus.Gauge
 
 	metrics.RPCMetrics
 
 	L1SourceCache *metrics.CacheMetrics
 	L2SourceCache *metrics.CacheMetrics
-
-	L2FollowSourceCache        *metrics.CacheMetrics
-	FollowSourceRequests       *prometheus.CounterVec
-	FollowSourceReorgs         *prometheus.CounterVec
-	SuperAuthorityReorgSignals *prometheus.CounterVec
 
 	DerivationIdle prometheus.Gauge
 
@@ -207,25 +196,11 @@ func NewMetrics(procName string, labels prometheus.Labels) *Metrics {
 			Name:      "up",
 			Help:      "1 if the op node has finished starting up",
 		}),
-		HardforkActivationTime: factory.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "hardfork_activation_timestamp",
-			Help:      "Configured hardfork activation timestamp by fork",
-		}, []string{"chain_id", "fork", "activation_basis"}),
 
 		RPCMetrics: metrics.MakeRPCMetrics(ns, factory),
 
 		L1SourceCache: metrics.NewCacheMetrics(factory, ns, "l1_source_cache", "L1 Source cache"),
 		L2SourceCache: metrics.NewCacheMetrics(factory, ns, "l2_source_cache", "L2 Source cache"),
-
-		L2FollowSourceCache: metrics.NewCacheMetrics(factory, ns, "l2_follow_source_cache", "L2 Follow source cache"),
-		FollowSourceRequests: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: ns,
-			Name:      "follow_source_requests_total",
-			Help:      "Count of follow source requests by result",
-		}, []string{"result"}),
-		FollowSourceReorgs:         factory.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "follow_source_reorgs_total", Help: "Count of follow source reorg decisions by action"}, []string{"action"}),
-		SuperAuthorityReorgSignals: factory.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "super_authority_reorg_signals_total", Help: "Count of super authority reorg signals by reason"}, []string{"reason"}),
 
 		DerivationIdle: factory.NewGauge(prometheus.GaugeOpts{
 			Namespace: ns,
@@ -477,38 +452,6 @@ func (m *Metrics) RecordInfo(version string) {
 	m.Info.WithLabelValues(version).Set(1)
 }
 
-func (m *Metrics) RecordHardforkActivationTimes(cfg *rollup.Config) {
-	chainID := ""
-	if cfg.L2ChainID != nil {
-		chainID = cfg.L2ChainID.String()
-	}
-
-	record := func(fork string, ts *uint64, basis string) {
-		if ts == nil {
-			return
-		}
-		m.HardforkActivationTime.WithLabelValues(chainID, fork, basis).Set(float64(*ts))
-	}
-
-	record("regolith", cfg.RegolithTime, "l2_timestamp")
-	record("canyon", cfg.CanyonTime, "l2_timestamp")
-	record("delta", cfg.DeltaTime, "l2_timestamp")
-	record("ecotone", cfg.EcotoneTime, "l2_timestamp")
-	record("fjord", cfg.FjordTime, "l2_timestamp")
-	record("granite", cfg.GraniteTime, "l2_timestamp")
-	record("holocene", cfg.HoloceneTime, "l2_timestamp")
-	record("isthmus", cfg.IsthmusTime, "l2_timestamp")
-	record("jovian", cfg.JovianTime, "l2_timestamp")
-	record("karst", cfg.KarstTime, "l2_timestamp")
-	record("lagoon", cfg.LagoonTime, "l2_timestamp")
-	record("pectra_blob_schedule", cfg.PectraBlobScheduleTime, "l1_origin_timestamp")
-	if cfg.KeepKarstUpgradeGas && cfg.KarstTime != nil {
-		// Behavioral opt-out flag, not a scheduled fork: reported only when set, valued at the
-		// Karst activation time it modifies. Absence of the series means the flag is unset.
-		record("keep_karst_upgrade_gas", cfg.KarstTime, "l2_timestamp")
-	}
-}
-
 // RecordUp sets the up metric to 1.
 func (m *Metrics) RecordUp() {
 	m.Up.Set(1)
@@ -606,18 +549,6 @@ func (m *Metrics) RecordSequencerInconsistentL1Origin(from eth.BlockID, to eth.B
 	m.SequencerInconsistentL1Origin.Record()
 	m.RecordRef("l1_origin", "inconsistent_from", from.Number, 0, from.Hash)
 	m.RecordRef("l1_origin", "inconsistent_to", to.Number, 0, to.Hash)
-}
-
-func (m *Metrics) RecordFollowSourceRequest(result string) {
-	m.FollowSourceRequests.WithLabelValues(result).Inc()
-}
-
-func (m *Metrics) RecordFollowSourceReorg(action string) {
-	m.FollowSourceReorgs.WithLabelValues(action).Inc()
-}
-
-func (m *Metrics) RecordSuperAuthorityReorgSignal(reason string) {
-	m.SuperAuthorityReorgSignals.WithLabelValues(reason).Inc()
 }
 
 func (m *Metrics) RecordSequencerReset() {
@@ -757,9 +688,6 @@ var NoopMetrics Metricer = new(noopMetricer)
 func (n *noopMetricer) RecordInfo(version string) {
 }
 
-func (n *noopMetricer) RecordHardforkActivationTimes(cfg *rollup.Config) {
-}
-
 func (n *noopMetricer) RecordUp() {
 }
 
@@ -770,15 +698,6 @@ func (m *noopMetricer) SetSequencerState(active bool) {
 }
 
 func (n *noopMetricer) RecordPipelineReset() {
-}
-
-func (n *noopMetricer) RecordFollowSourceRequest(result string) {
-}
-
-func (n *noopMetricer) RecordFollowSourceReorg(action string) {
-}
-
-func (n *noopMetricer) RecordSuperAuthorityReorgSignal(reason string) {
 }
 
 func (n *noopMetricer) RecordSequencingError() {

@@ -28,8 +28,7 @@ func TestOriginSelectorFetchCurrentError(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 500,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -75,8 +74,7 @@ func TestOriginSelectorFetchNextError(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 500,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -131,8 +129,7 @@ func TestOriginSelectorAdvances(t *testing.T) {
 
 		log := testlog.Logger(t, log.LevelCrit)
 		cfg := &rollup.Config{
-			MaxSequencerDrift: 500,
-			BlockTime:         2,
+			BlockTime: 2,
 		}
 		l1 := &testutils.MockL1Source{}
 		defer l1.AssertExpectations(t)
@@ -235,8 +232,7 @@ func TestOriginSelectorHandlesReset(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 500,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -289,8 +285,7 @@ func TestOriginSelectorFetchesNextOrigin(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 500,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -348,8 +343,7 @@ func TestOriginSelectorHandlesReorg(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelDebug)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 500,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -439,8 +433,7 @@ func TestOriginSelectorRespectsOriginTiming(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 500,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -471,10 +464,10 @@ func TestOriginSelectorRespectsOriginTiming(t *testing.T) {
 
 // TestOriginSelectorRespectsSeqDrift
 //
-// There are 2 L1 blocks at time 20 & 25. The L2 Head is at time 27.
-// The next L2 time is 29. The sequencer drift is 8 so the L2 head is
+// There are 2 L1 blocks at time 20 & 25. The L2 Head is at time 1819.
+// The next L2 time is 1821. The sequencer drift is 1800 so the L2 head is
 // valid with origin `a`, but the next L2 block is not valid with origin `b.`
-// This is because 29 (next L2 time) > 20 (origin) + 8 (seq drift) => invalid block.
+// This is because 1821 (next L2 time) > 20 (origin) + 1800 (seq drift) => invalid block.
 // The origin selector does not yet know about block `b` so it should wait for the
 // background fetch to complete synchronously.
 func TestOriginSelectorRespectsSeqDrift(t *testing.T) {
@@ -483,8 +476,7 @@ func TestOriginSelectorRespectsSeqDrift(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 8,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -501,7 +493,7 @@ func TestOriginSelectorRespectsSeqDrift(t *testing.T) {
 	}
 	l2Head := eth.L2BlockRef{
 		L1Origin: a.ID(),
-		Time:     27,
+		Time:     1819,
 	}
 
 	l1.ExpectL1BlockRefByHash(a.Hash, a, nil)
@@ -528,8 +520,7 @@ func TestOriginSelectorRespectsConfDepth(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 500,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -563,10 +554,10 @@ func TestOriginSelectorRespectsConfDepth(t *testing.T) {
 // L2 block is greater than the sequencer drift.
 // It's more important to maintain safety with an empty block than to maintain liveness with poor conf depth.
 //
-// There are 2 L1 blocks at time 20 & 25. The L2 Head is at time 27.
-// The next L2 time is 29. The sequencer drift is 8 so the L2 head is
+// There are 2 L1 blocks at time 20 & 25. The L2 Head is at time 1819.
+// The next L2 time is 1821. The sequencer drift is 1800 so the L2 head is
 // valid with origin `a`, but the next L2 block is not valid with origin `b.`
-// This is because 29 (next L2 time) > 20 (origin) + 8 (seq drift) => invalid block.
+// This is because 1821 (next L2 time) > 20 (origin) + 1800 (seq drift) => invalid block.
 // We maintain confirmation distance, even though we would shift to the next origin if we could.
 func TestOriginSelectorStrictConfDepth(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -574,8 +565,7 @@ func TestOriginSelectorStrictConfDepth(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 8,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -592,7 +582,7 @@ func TestOriginSelectorStrictConfDepth(t *testing.T) {
 	}
 	l2Head := eth.L2BlockRef{
 		L1Origin: a.ID(),
-		Time:     27,
+		Time:     1819,
 	}
 
 	l1.ExpectL1BlockRefByHash(a.Hash, a, nil)
@@ -603,23 +593,15 @@ func TestOriginSelectorStrictConfDepth(t *testing.T) {
 	require.ErrorIs(t, err, ErrNextL1OriginRequired)
 }
 
-func u64ptr(n uint64) *uint64 {
-	return &n
-}
-
-// TestOriginSelector_FjordSeqDrift has a similar setup to the previous test
-// TestOriginSelectorStrictConfDepth but with Fjord activated at the l1 origin.
-// This time the same L1 origin is returned if no new L1 head is seen, instead of an error,
-// because the Fjord max sequencer drift is higher.
+// TestOriginSelector_FjordSeqDrift checks that the same L1 origin is returned if no new L1 head
+// is seen, instead of an error, while the next L2 block is within the max sequencer drift.
 func TestOriginSelector_FjordSeqDrift(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 8,
-		BlockTime:         2,
-		FjordTime:         u64ptr(20), // a's timestamp
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -630,7 +612,7 @@ func TestOriginSelector_FjordSeqDrift(t *testing.T) {
 	}
 	l2Head := eth.L2BlockRef{
 		L1Origin: a.ID(),
-		Time:     27, // next L2 block time would be past pre-Fjord seq drift
+		Time:     27,
 	}
 
 	s := NewL1OriginSelector(ctx, log, cfg, l1)
@@ -643,8 +625,8 @@ func TestOriginSelector_FjordSeqDrift(t *testing.T) {
 
 // TestOriginSelectorSeqDriftRespectsNextOriginTime
 //
-// There are 2 L1 blocks at time 20 & 100. The L2 Head is at time 27.
-// The next L2 time is 29. Even though the next L2 time is past the seq
+// There are 2 L1 blocks at time 20 & 1900. The L2 Head is at time 1819.
+// The next L2 time is 1821. Even though the next L2 time is past the seq
 // drift, the origin should remain on block `a` because the next origin's
 // time is greater than the next L2 time.
 func TestOriginSelectorSeqDriftRespectsNextOriginTime(t *testing.T) {
@@ -653,8 +635,7 @@ func TestOriginSelectorSeqDriftRespectsNextOriginTime(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 8,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -666,12 +647,12 @@ func TestOriginSelectorSeqDriftRespectsNextOriginTime(t *testing.T) {
 	b := eth.L1BlockRef{
 		Hash:       common.Hash{'b'},
 		Number:     11,
-		Time:       100,
+		Time:       1900,
 		ParentHash: a.Hash,
 	}
 	l2Head := eth.L2BlockRef{
 		L1Origin: a.ID(),
-		Time:     27,
+		Time:     1819,
 	}
 
 	s := NewL1OriginSelector(ctx, log, cfg, l1)
@@ -685,8 +666,8 @@ func TestOriginSelectorSeqDriftRespectsNextOriginTime(t *testing.T) {
 
 // TestOriginSelectorSeqDriftRespectsNextOriginTimeNoCache
 //
-// There are 2 L1 blocks at time 20 & 100. The L2 Head is at time 27.
-// The next L2 time is 29. Even though the next L2 time is past the seq
+// There are 2 L1 blocks at time 20 & 1900. The L2 Head is at time 1819.
+// The next L2 time is 1821. Even though the next L2 time is past the seq
 // drift, the origin should remain on block `a` because the next origin's
 // time is greater than the next L2 time.
 // The L1OriginSelector does not have the next origin cached, and must fetch it
@@ -697,8 +678,7 @@ func TestOriginSelectorSeqDriftRespectsNextOriginTimeNoCache(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 8,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -710,12 +690,12 @@ func TestOriginSelectorSeqDriftRespectsNextOriginTimeNoCache(t *testing.T) {
 	b := eth.L1BlockRef{
 		Hash:       common.Hash{'b'},
 		Number:     11,
-		Time:       100,
+		Time:       1900,
 		ParentHash: a.Hash,
 	}
 	l2Head := eth.L2BlockRef{
 		L1Origin: a.ID(),
-		Time:     27,
+		Time:     1819,
 	}
 
 	l1.ExpectL1BlockRefByNumber(b.Number, b, nil)
@@ -731,8 +711,8 @@ func TestOriginSelectorSeqDriftRespectsNextOriginTimeNoCache(t *testing.T) {
 // TestOriginSelectorHandlesLateL1Blocks tests the forced repeat of the previous origin,
 // but with a conf depth that first prevents it from learning about the need to repeat.
 //
-// There are 2 L1 blocks at time 20 & 100. The L2 Head is at time 27.
-// The next L2 time is 29. Even though the next L2 time is past the seq
+// There are 2 L1 blocks at time 20 & 1900. The L2 Head is at time 1819.
+// The next L2 time is 1821. Even though the next L2 time is past the seq
 // drift, the origin should remain on block `a` because the next origin's
 // time is greater than the next L2 time.
 // Due to a conf depth of 2, block `b` is not immediately visible,
@@ -743,8 +723,7 @@ func TestOriginSelectorHandlesLateL1Blocks(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 8,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -756,24 +735,24 @@ func TestOriginSelectorHandlesLateL1Blocks(t *testing.T) {
 	b := eth.L1BlockRef{
 		Hash:       common.Hash{'b'},
 		Number:     11,
-		Time:       100,
+		Time:       1900,
 		ParentHash: a.Hash,
 	}
 	c := eth.L1BlockRef{
 		Hash:       common.Hash{'c'},
 		Number:     12,
-		Time:       150,
+		Time:       1950,
 		ParentHash: b.Hash,
 	}
 	d := eth.L1BlockRef{
 		Hash:       common.Hash{'d'},
 		Number:     13,
-		Time:       200,
+		Time:       2000,
 		ParentHash: c.Hash,
 	}
 	l2Head := eth.L2BlockRef{
 		L1Origin: a.ID(),
-		Time:     27,
+		Time:     1819,
 	}
 
 	// l2 head does not change, so we start at the same origin again and again until we meet the conf depth
@@ -806,8 +785,7 @@ func TestOriginSelectorMiscEvent(t *testing.T) {
 
 	log := testlog.Logger(t, log.LevelCrit)
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 8,
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 	l1 := &testutils.MockL1Source{}
 	defer l1.AssertExpectations(t)
@@ -821,8 +799,7 @@ func TestOriginSelectorMiscEvent(t *testing.T) {
 
 func TestFindL1OriginOfNextL2Block(t *testing.T) {
 	cfg := &rollup.Config{
-		MaxSequencerDrift: 1800, // Use Fjord constant value
-		BlockTime:         2,
+		BlockTime: 2,
 	}
 
 	los := NewL1OriginSelector(context.Background(), testlog.Logger(t, log.LevelDebug), cfg, &testutils.MockL1Source{})
@@ -1056,12 +1033,12 @@ func TestOriginSelectorKeepsUpWithL1(t *testing.T) {
 			t.Run(fmt.Sprintf("blockTime=%d/buildFirst=%v", blockTime, buildFirst), func(t *testing.T) {
 				ctx := context.Background()
 				l1 := &simulatedL1{now: 10_000, confDepth: confDepth}
-				cfg := &rollup.Config{BlockTime: blockTime, MaxSequencerDrift: 1800}
+				cfg := &rollup.Config{BlockTime: blockTime}
 				s := NewL1OriginSelector(ctx, testlog.Logger(t, log.LevelCrit), cfg, l1)
 
 				l2Head := eth.L2BlockRef{Time: l1.now, L1Origin: simulatedL1Block(l1.now/12 - confDepth).ID()}
 				// Long enough for a lagging origin to drift all the way to the limit.
-				for l2Head.Time < 10_000+3*cfg.MaxSequencerDrift {
+				for l2Head.Time < 10_000+3*rollup.MaxSequencerDrift {
 					l1.now = l2Head.Time
 					fcu := engine.ForkchoiceUpdateEvent{UnsafeL2Head: l2Head}
 					if !buildFirst {

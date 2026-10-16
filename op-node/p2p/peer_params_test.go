@@ -67,7 +67,7 @@ func (testSuite *PeerParamsTestSuite) TestGetPeerScoreParams_Light() {
 	testSuite.NoError(err)
 	// Topics should not contain options for any block topic
 	testSuite.Len(peerParams.Topics, 0)
-	_, ok := peerParams.Topics[blocksTopicV1(cfg)]
+	_, ok := peerParams.Topics[blocksTopicV4(cfg)]
 	testSuite.False(ok, "should not have block topic params")
 
 	testSuite.Equal(peerParams.AppSpecificWeight, float64(1))

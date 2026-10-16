@@ -55,10 +55,6 @@ func setupSyncTestData(length uint64) (*rollup.Config, *syncTestData) {
 		L2ChainID: big.NewInt(1234),
 	}
 
-	ecotoneBlock := length / 2
-	ecotoneTime := cfg.Genesis.L2Time + ecotoneBlock*cfg.BlockTime
-	cfg.EcotoneTime = &ecotoneTime
-
 	// create some simple fake test blocks
 	payloads := make(map[uint64]*eth.ExecutionPayloadEnvelope)
 	payloads[0] = &eth.ExecutionPayloadEnvelope{
@@ -78,17 +74,13 @@ func setupSyncTestData(length uint64) (*rollup.Config, *syncTestData) {
 			},
 		}
 
-		if cfg.IsEcotone(timestamp) {
-			hash := common.BigToHash(big.NewInt(int64(i)))
-			payload.ParentBeaconBlockRoot = &hash
-
-			zero := eth.Uint64Quantity(0)
-			payload.ExecutionPayload.ExcessBlobGas = &zero
-			payload.ExecutionPayload.BlobGasUsed = &zero
-
-			w := types.Withdrawals{}
-			payload.ExecutionPayload.Withdrawals = &w
-		}
+		hash := common.BigToHash(big.NewInt(int64(i)))
+		payload.ParentBeaconBlockRoot = &hash
+		zero := eth.Uint64Quantity(0)
+		payload.ExecutionPayload.ExcessBlobGas = &zero
+		payload.ExecutionPayload.BlobGasUsed = &zero
+		w := types.Withdrawals{}
+		payload.ExecutionPayload.Withdrawals = &w
 
 		payload.ExecutionPayload.BlockHash, _ = payload.CheckBlockHash()
 		payloads[i] = payload

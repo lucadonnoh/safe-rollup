@@ -29,7 +29,9 @@ func TestSizedBlockParity(t *testing.T) {
 				continue
 			}
 			wantRaw += tx.Size() + 2
-			wantDA += bigs.Uint64Strict(opfees.TxRollupCostData(tx).EstimatedDASize())
+			data, err := tx.MarshalBinary()
+			require.NoError(t, err)
+			wantDA += bigs.Uint64Strict(opfees.NewRollupCostData(data).EstimatedDASize())
 		}
 		require.Equal(t, wantRaw, sized.RawSize(), "raw size, block %d", i)
 		require.Equal(t, wantDA, sized.EstimatedDABytes(), "estimated DA bytes, block %d", i)

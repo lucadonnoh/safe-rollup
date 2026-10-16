@@ -220,26 +220,14 @@ func (srv *ReqRespServer) handleSyncRequest(ctx context.Context, stream network.
 
 	w := snappy.NewBufferedWriter(stream)
 
-	if srv.cfg.IsEcotone(uint64(envelope.ExecutionPayload.Timestamp)) {
-		// 0 - resultCode: success = 0
-		// 1:5 - version: 1 (little endian)
-		tmp := [5]byte{0, 1, 0, 0, 0}
-		if _, err := stream.Write(tmp[:]); err != nil {
-			return req, fmt.Errorf("failed to write response header data: %w", err)
-		}
-		if _, err := envelope.MarshalSSZ(w); err != nil {
-			return req, fmt.Errorf("failed to write payload to sync response: %w", err)
-		}
-	} else {
-		// 0 - resultCode: success = 0
-		// 1:5 - version: 0
-		var tmp [5]byte
-		if _, err := stream.Write(tmp[:]); err != nil {
-			return req, fmt.Errorf("failed to write response header data: %w", err)
-		}
-		if _, err := envelope.ExecutionPayload.MarshalSSZ(w); err != nil {
-			return req, fmt.Errorf("failed to write payload to sync response: %w", err)
-		}
+	// 0 - resultCode: success = 0
+	// 1:5 - version: 1 (little endian)
+	tmp := [5]byte{0, 1, 0, 0, 0}
+	if _, err := stream.Write(tmp[:]); err != nil {
+		return req, fmt.Errorf("failed to write response header data: %w", err)
+	}
+	if _, err := envelope.MarshalSSZ(w); err != nil {
+		return req, fmt.Errorf("failed to write payload to sync response: %w", err)
 	}
 
 	if err := w.Close(); err != nil {

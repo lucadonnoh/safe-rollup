@@ -11,21 +11,17 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
-	"github.com/ethereum-optimism/optimism/op-batcher/config"
-	"github.com/ethereum-optimism/optimism/op-batcher/flags"
 	"github.com/ethereum-optimism/optimism/op-batcher/metrics"
 	"github.com/ethereum-optimism/optimism/op-batcher/rpc"
 	"github.com/ethereum-optimism/optimism/op-node/params"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
 	"github.com/ethereum-optimism/optimism/op-service/dial"
-	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/httputil"
 	"github.com/ethereum-optimism/optimism/op-service/log"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
-	"github.com/ethereum-optimism/optimism/op-service/slices"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
 )
 
@@ -36,19 +32,11 @@ type BatcherConfig struct {
 	PollInterval           time.Duration
 	MaxPendingTransactions uint64
 
-	// UseAltDA is true if the rollup config has a DA challenge address so the batcher
-	// will post inputs to the DA server and post commitments to blobs or calldata.
-	UseAltDA bool
-	// GenericDA is true if the DA server generates commitments for the input
-	GenericDA bool
-	// maximum number of concurrent blob put requests to the DA server
+	// maximum number of concurrent put requests to the DA server
 	MaxConcurrentDARequests uint64
 
 	WaitNodeSync        bool
 	CheckRecentTxsDepth int
-
-	// For throttling DA. See CLIConfig in config.go for details on these parameters.
-	ThrottleParams config.ThrottleParams
 }
 
 // BatcherService represents a full batch-submitter instance and its resources,
@@ -64,7 +52,7 @@ type BatcherService struct {
 
 	BatcherConfig
 
-	ChannelConfig ChannelConfigProvider
+	ChannelConfig ChannelConfig
 	RollupConfig  *rollup.Config
 
 	driver *BatchSubmitter
@@ -108,58 +96,6 @@ func (bs *BatcherService) initFromCLIConfig(ctx context.Context, closeApp contex
 	bs.NetworkTimeout = cfg.TxMgrConfig.NetworkTimeout
 	bs.CheckRecentTxsDepth = cfg.CheckRecentTxsDepth
 	bs.WaitNodeSync = cfg.WaitNodeSync
-
-	bs.ThrottleParams = config.ThrottleParams{
-		LowerThreshold:      cfg.ThrottleConfig.LowerThreshold,
-		UpperThreshold:      cfg.ThrottleConfig.UpperThreshold,
-		TxSizeLowerLimit:    cfg.ThrottleConfig.TxSizeLowerLimit,
-		TxSizeUpperLimit:    cfg.ThrottleConfig.TxSizeUpperLimit,
-		BlockSizeLowerLimit: cfg.ThrottleConfig.BlockSizeLowerLimit,
-		BlockSizeUpperLimit: cfg.ThrottleConfig.BlockSizeUpperLimit,
-		ControllerType:      cfg.ThrottleConfig.ControllerType,
-		Endpoints:           slices.Union(cfg.L2EthRpc, cfg.ThrottleConfig.AdditionalEndpoints),
-	}
-
-	if bs.ThrottleParams.ControllerType == config.PIDControllerType {
-		bs.Log.Warn("EXPERIMENTAL PID CONTROLLER CONFIGURED")
-		bs.Log.Warn("PID controller is EXPERIMENTAL and should only be used by control theory experts. Improper configuration can lead to system instability or poor performance. Monitor system behavior closely when using PID control.")
-
-		// Validate PID configuration parameters
-		if cfg.ThrottleConfig.PidKp < 0 {
-			return fmt.Errorf("PID Kp gain must be non-negative, got %f", cfg.ThrottleConfig.PidKp)
-		}
-		if cfg.ThrottleConfig.PidKi < 0 {
-			return fmt.Errorf("PID Ki gain must be non-negative, got %f", cfg.ThrottleConfig.PidKi)
-		}
-		if cfg.ThrottleConfig.PidKd < 0 {
-			return fmt.Errorf("PID Kd gain must be non-negative, got %f", cfg.ThrottleConfig.PidKd)
-		}
-		if cfg.ThrottleConfig.PidIntegralMax <= 0 {
-			return fmt.Errorf("PID IntegralMax must be positive, got %f", cfg.ThrottleConfig.PidIntegralMax)
-		}
-		if cfg.ThrottleConfig.PidOutputMax <= 0 || cfg.ThrottleConfig.PidOutputMax > 1 {
-			return fmt.Errorf("PID OutputMax must be between 0 and 1, got %f", cfg.ThrottleConfig.PidOutputMax)
-		}
-		if cfg.ThrottleConfig.PidSampleTime <= 0 {
-			return fmt.Errorf("PID SampleTime must be positive, got %v", cfg.ThrottleConfig.PidSampleTime)
-		}
-
-		bs.ThrottleParams.PIDConfig = &config.PIDConfig{
-			Kp:          cfg.ThrottleConfig.PidKp,
-			Ki:          cfg.ThrottleConfig.PidKi,
-			Kd:          cfg.ThrottleConfig.PidKd,
-			IntegralMax: cfg.ThrottleConfig.PidIntegralMax,
-			OutputMax:   cfg.ThrottleConfig.PidOutputMax,
-			SampleTime:  cfg.ThrottleConfig.PidSampleTime,
-		}
-		bs.Log.Info("Initialized PID throttle controller",
-			"kp", bs.ThrottleParams.PIDConfig.Kp,
-			"ki", bs.ThrottleParams.PIDConfig.Ki,
-			"kd", bs.ThrottleParams.PIDConfig.Kd,
-			"integral_max", bs.ThrottleParams.PIDConfig.IntegralMax,
-			"output_max", bs.ThrottleParams.PIDConfig.OutputMax,
-			"sample_time", bs.ThrottleParams.PIDConfig.SampleTime)
-	}
 
 	if err := bs.initRPCClients(ctx, cfg); err != nil {
 		return err
@@ -257,59 +193,23 @@ func (bs *BatcherService) initRollupConfig(ctx context.Context) error {
 }
 
 func (bs *BatcherService) initChannelConfig(cfg *CLIConfig) error {
-	channelTimeout := bs.RollupConfig.ChannelTimeoutBedrock
-	// Use lower channel timeout if granite is scheduled.
-	// Ensures channels are restricted to the tighter timeout even if granite hasn't activated yet
-	if bs.RollupConfig.GraniteTime != nil {
-		channelTimeout = params.ChannelTimeoutGranite
-	}
 	cc := ChannelConfig{
 		SeqWindowSize:         bs.RollupConfig.SeqWindowSize,
-		ChannelTimeout:        channelTimeout,
+		ChannelTimeout:        params.ChannelTimeoutGranite,
 		MaxChannelDuration:    cfg.MaxChannelDuration,
-		MaxFrameSize:          cfg.MaxL1TxSize - 1, // account for version byte prefix; reset for blobs
+		MaxFrameSize:          cfg.MaxL1TxSize - 1, // account for version byte prefix
 		MaxBlocksPerSpanBatch: cfg.MaxBlocksPerSpanBatch,
 		TargetNumFrames:       cfg.TargetNumFrames,
 		SubSafetyMargin:       cfg.SubSafetyMargin,
 		BatchType:             cfg.BatchType,
 	}
 
-	switch cfg.DataAvailabilityType {
-	case flags.BlobsType, flags.AutoType:
-		if !cfg.TestUseMaxTxSizeForBlobs {
-			// account for version byte prefix
-			cc.MaxFrameSize = eth.MaxBlobDataSize - 1
-		}
-		cc.UseBlobs = true
-	case flags.CalldataType: // do nothing
-	default:
-		return fmt.Errorf("unknown data availability type: %v", cfg.DataAvailabilityType)
-	}
-
-	if bs.UseAltDA && cc.UseBlobs {
-		return fmt.Errorf("cannot use data availability type blobs or auto with Alt-DA")
-	}
-
 	cc.InitCompressorConfig(cfg.ApproxComprRatio, cfg.Compressor, cfg.CompressionAlgo)
-
-	if cc.UseBlobs && !bs.RollupConfig.IsEcotone(uint64(time.Now().Unix())) {
-		return errors.New("cannot use Blobs before Ecotone")
-	}
-	if !cc.UseBlobs && bs.RollupConfig.IsEcotone(uint64(time.Now().Unix())) {
-		bs.Log.Warn("Ecotone upgrade is active, but batcher is not configured to use Blobs!")
-	}
-
-	// Checking for brotli compression only post Fjord
-	if cc.CompressorConfig.CompressionAlgo.IsBrotli() && !bs.RollupConfig.IsFjord(uint64(time.Now().Unix())) {
-		return errors.New("cannot use brotli compression before Fjord")
-	}
 
 	if err := cc.Check(); err != nil {
 		return fmt.Errorf("invalid channel configuration: %w", err)
 	}
 	bs.Log.Info("Initialized channel-config",
-		"da_type", cfg.DataAvailabilityType,
-		"use_alt_da", bs.UseAltDA,
 		"max_frame_size", cc.MaxFrameSize,
 		"target_num_frames", cc.TargetNumFrames,
 		"compressor", cc.CompressorConfig.Kind,
@@ -318,23 +218,7 @@ func (bs *BatcherService) initChannelConfig(cfg *CLIConfig) error {
 		"max_channel_duration", cc.MaxChannelDuration,
 		"channel_timeout", cc.ChannelTimeout,
 		"sub_safety_margin", cc.SubSafetyMargin)
-	if bs.UseAltDA {
-		bs.Log.Warn("Alt-DA Mode is a Beta feature of the MIT licensed OP Stack.  While it has received initial review from core contributors, it is still undergoing testing, and may have bugs or other issues.")
-	}
-
-	if cfg.DataAvailabilityType == flags.AutoType {
-		// copy blobs config and use hardcoded calldata fallback config for now
-		calldataCC := cc
-		calldataCC.TargetNumFrames = 1
-		calldataCC.MaxFrameSize = 120_000
-		calldataCC.UseBlobs = false
-		calldataCC.ReinitCompressorConfig()
-
-		bs.ChannelConfig = NewDynamicEthChannelConfig(bs.Log, 10*time.Second, bs.TxManager, cc, calldataCC)
-	} else {
-		bs.ChannelConfig = cc
-	}
-
+	bs.ChannelConfig = cc
 	return nil
 }
 
@@ -435,8 +319,6 @@ func (bs *BatcherService) initAltDA(cfg *CLIConfig) error {
 		return err
 	}
 	bs.AltDA = config.NewDAClient()
-	bs.UseAltDA = config.Enabled
-	bs.GenericDA = config.GenericDA
 	return nil
 }
 
@@ -474,7 +356,6 @@ func (bs *BatcherService) Stop(ctx context.Context) error {
 
 	// close the TxManager first, so that new work is denied, in-flight work is cancelled as early as possible
 	// (transactions which are expected to be confirmed are still waited for)
-	// TxManager.Close() also stops the blob tip oracle if it's running.
 	if bs.TxManager != nil {
 		bs.TxManager.Close()
 	}
@@ -523,24 +404,6 @@ func (bs *BatcherService) Stop(ctx context.Context) error {
 }
 
 var _ cliapp.Lifecycle = (*BatcherService)(nil)
-
-// TestDriver returns a handler for the batch-submitter driver element, to start/stop/restart the
-// batch-submission work, for use only in testing.
-func (bs *BatcherService) TestDriver() *TestBatchSubmitter {
-	return &TestBatchSubmitter{
-		BatchSubmitter: bs.driver,
-	}
-}
-
-// ThrottlingTestDriver returns a handler for the batch-submitter driver element that is in "always throttle" mode, for
-// use only in testing.
-func (bs *BatcherService) ThrottlingTestDriver() *TestBatchSubmitter {
-	tbs := &TestBatchSubmitter{
-		BatchSubmitter: bs.driver,
-	}
-	tbs.BatchSubmitter.channelMgr.metr = new(metrics.ThrottlingMetrics)
-	return tbs
-}
 
 func (bs *BatcherService) HTTPEndpoint() string {
 	if bs.rpcServer == nil {

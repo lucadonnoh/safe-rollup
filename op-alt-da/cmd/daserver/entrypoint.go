@@ -11,49 +11,23 @@ import (
 )
 
 func StartDAServer(cliCtx *cli.Context) error {
-	if err := CheckRequired(cliCtx); err != nil {
+	if err := checkFlags(cliCtx); err != nil {
 		return err
 	}
-
-	cfg := ReadCLIConfig(cliCtx)
-	if err := cfg.Check(); err != nil {
-		return err
-	}
-
-	logCfg := logcli.ReadCLIConfig(cliCtx)
-
-	l := logcli.NewLogger(logcli.AppOut(cliCtx), logCfg)
+	l := logcli.NewLogger(logcli.AppOut(cliCtx), logcli.ReadCLIConfig(cliCtx))
 	logcli.SetGlobalLogHandler(l.Handler())
 
-	l.Info("Initializing AltDA server...")
-
-	var store altda.KVStore
-
-	if cfg.FileStoreEnabled() {
-		l.Info("Using file storage", "path", cfg.FileStoreDirPath)
-		store = NewFileStore(cfg.FileStoreDirPath)
-	} else if cfg.S3Enabled() {
-		l.Info("Using S3 storage", "bucket", cfg.S3Config().Bucket)
-		s3, err := NewS3Store(cfg.S3Config())
-		if err != nil {
-			return fmt.Errorf("failed to create S3 store: %w", err)
-		}
-		store = s3
-	}
-
-	server := altda.NewDAServer(cliCtx.String(ListenAddrFlagName), cliCtx.Int(PortFlagName), store, l, cfg.UseGenericComm)
-
+	dir := cliCtx.String(FileStorePathFlag.Name)
+	l.Info("Using file storage", "path", dir)
+	server := altda.NewDAServer(cliCtx.String(ListenAddrFlag.Name), cliCtx.Int(PortFlag.Name), NewFileStore(dir), l)
 	if err := server.Start(); err != nil {
-		return fmt.Errorf("failed to start the DA server")
-	} else {
-		l.Info("Started DA Server")
+		return fmt.Errorf("failed to start the DA server: %w", err)
 	}
-
+	l.Info("Started DA Server")
 	defer func() {
 		if err := server.Stop(); err != nil {
 			l.Error("failed to stop DA server", "err", err)
 		}
 	}()
-
 	return ctxinterrupt.Wait(cliCtx.Context)
 }

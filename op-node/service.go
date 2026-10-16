@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
@@ -78,26 +79,22 @@ func NewConfig(ctx cliiface.Context, log log.Logger) (*config.Config, error) {
 		log.Warn("Heartbeat functionality is not supported anymore, CLI flags will be removed in following release.")
 	}
 	cfg := &config.Config{
-		L1:                          l1Endpoint,
-		L2:                          l2Endpoint,
-		L1ChainConfig:               l1ChainConfig,
-		Rollup:                      *rollupConfig,
-		Driver:                      *driverConfig,
-		RPC:                         rpc.ReadCLIConfig(ctx),
-		Metrics:                     opmetrics.ReadCLIConfig(ctx),
-		Pprof:                       oppprof.ReadCLIConfig(ctx),
-		P2P:                         p2pConfig,
-		P2PSigner:                   p2pSignerSetup,
-		L1EpochPollInterval:         ctx.Duration(flags.L1EpochPollIntervalFlag.Name),
-		RuntimeConfigReloadInterval: ctx.Duration(flags.RuntimeConfigReloadIntervalFlag.Name),
-		ConfigPersistence:           configPersistence,
-		Sync:                        *syncConfig,
-		L2FollowSource:              NewL2FollowSourceConfig(ctx),
+		L1:                  l1Endpoint,
+		L2:                  l2Endpoint,
+		L1ChainConfig:       l1ChainConfig,
+		Rollup:              *rollupConfig,
+		Driver:              *driverConfig,
+		RPC:                 rpc.ReadCLIConfig(ctx),
+		Metrics:             opmetrics.ReadCLIConfig(ctx),
+		Pprof:               oppprof.ReadCLIConfig(ctx),
+		P2P:                 p2pConfig,
+		P2PSigner:           p2pSignerSetup,
+		L1EpochPollInterval: ctx.Duration(flags.L1EpochPollIntervalFlag.Name),
+		P2PSequencerAddress: common.HexToAddress(ctx.String(flags.P2PSequencerAddressName)),
+		ConfigPersistence:   configPersistence,
+		Sync:                *syncConfig,
 
 		AltDA: altda.ReadCLIConfig(ctx),
-
-		IgnoreMissingPectraBlobSchedule: ctx.Bool(flags.IgnoreMissingPectraBlobSchedule.Name),
-		FetchWithdrawalRootFromState:    ctx.Bool(flags.FetchWithdrawalRootFromState.Name),
 	}
 
 	if err := cfg.LoadPersisted(log); err != nil {
@@ -136,15 +133,6 @@ func NewL2EndpointConfig(ctx cliiface.Context, logger log.Logger) (*config.L2End
 		L2EngineJWTSecret:   secret,
 		L2EngineCallTimeout: l2RpcTimeout,
 	}, nil
-}
-
-func NewL2FollowSourceConfig(ctx cliiface.Context) *config.L2FollowSourceConfig {
-	l2Addr := ctx.String(flags.L2FollowSource.Name)
-	l2RpcTimeout := ctx.Duration(flags.L2FollowSourceRpcTimeout.Name)
-	return &config.L2FollowSourceConfig{
-		L2RPCAddr:        l2Addr,
-		L2RPCCallTimeout: l2RpcTimeout,
-	}
 }
 
 func NewConfigPersistence(ctx cliiface.Context) config.ConfigPersistence {
@@ -186,7 +174,6 @@ func NewRollupConfigFromCLI(log log.Logger, ctx cliiface.Context) (*rollup.Confi
 	if err != nil {
 		return nil, err
 	}
-	applyOverrides(ctx, rollupConfig)
 	return rollupConfig, nil
 }
 
@@ -199,19 +186,6 @@ func NewRollupConfig(rollupConfigPath string) (*rollup.Config, error) {
 
 	var rollupConfig rollup.Config
 	return &rollupConfig, rollupConfig.ParseRollupConfig(file)
-}
-
-func applyOverrides(ctx cliiface.Context, rollupConfig *rollup.Config) {
-	for _, fork := range opflags.OverridableForks {
-		flagName := opflags.OverrideName(fork)
-		if ctx.IsSet(flagName) {
-			timestamp := ctx.Uint64(flagName)
-			rollupConfig.SetActivationTime(fork, &timestamp)
-		}
-	}
-	if ctx.IsSet(opflags.KeepKarstUpgradeGasOverrideName) {
-		rollupConfig.KeepKarstUpgradeGas = ctx.Bool(opflags.KeepKarstUpgradeGasOverrideName)
-	}
 }
 
 func NewL1ChainConfig(chainId *big.Int, ctx cliiface.Context, log log.Logger) (*params.ChainConfig, error) {
@@ -266,7 +240,6 @@ func NewSyncConfig(ctx cliiface.Context, log log.Logger) (*sync.Config, error) {
 	if ctx.IsSet(flags.L2EngineSyncEnabled.Name) {
 		log.Error("l2.engine-sync is deprecated and will be removed in a future release. Use --syncmode=execution-layer instead.")
 	}
-	l2FollowSourceEndpoint := ctx.String(flags.L2FollowSource.Name)
 	mode, err := sync.StringToMode(ctx.String(flags.SyncModeFlag.Name))
 	if err != nil {
 		return nil, err
@@ -277,10 +250,7 @@ func NewSyncConfig(ctx cliiface.Context, log log.Logger) (*sync.Config, error) {
 		SyncMode:                       mode,
 		SkipSyncStartCheck:             ctx.Bool(flags.SkipSyncStartCheck.Name),
 		SupportsPostFinalizationELSync: engineKind.SupportsPostFinalizationELSync(),
-		L2FollowSourceEndpoint:         l2FollowSourceEndpoint,
-		// Sequencer needs a manual initial reset when follow source
-		NeedInitialResetEngine: ctx.Bool(flags.SequencerEnabledFlag.Name) && l2FollowSourceEndpoint != "",
-		OffsetELSafe:           offsetELSafe,
+		OffsetELSafe:                   offsetELSafe,
 	}
 	if ctx.Bool(flags.L2EngineSyncEnabled.Name) {
 		cfg.SyncMode = sync.ELSync

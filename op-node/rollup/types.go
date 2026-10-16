@@ -9,8 +9,6 @@ import (
 	"math/big"
 	"time"
 
-	altda "github.com/ethereum-optimism/optimism/op-alt-da"
-	"github.com/ethereum-optimism/optimism/op-core/forks"
 	opparams "github.com/ethereum-optimism/optimism/op-core/params"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/log"
@@ -28,9 +26,7 @@ const historyPrunedErrCode = 4444
 
 var (
 	ErrBlockTimeZero                 = errors.New("block time cannot be 0")
-	ErrMissingChannelTimeout         = errors.New("channel timeout must be set, this should cover at least a L1 block time")
 	ErrInvalidSeqWindowSize          = errors.New("sequencing window size must at least be 2")
-	ErrInvalidMaxSeqDrift            = errors.New("maximum sequencer drift must be greater than 0")
 	ErrMissingGenesisL1Hash          = errors.New("genesis L1 hash cannot be empty")
 	ErrMissingGenesisL2Hash          = errors.New("genesis L2 hash cannot be empty")
 	ErrGenesisHashesSame             = errors.New("achievement get! rollup inception: L1 and L2 genesis cannot be the same")
@@ -60,92 +56,17 @@ type Genesis struct {
 	SystemConfig eth.SystemConfig `json:"system_config"`
 }
 
-// AltDAConfig enables alt-DA mode: the batcher posts commitments to the batch inbox and the
-// batch data lives in an offchain DA service.
-type AltDAConfig struct {
-	// CommitmentType specifies which commitment type can be used. Defaults to Keccak (type 0) if not present
-	CommitmentType string `json:"da_commitment_type"`
-}
-
 type Config struct {
 	// Genesis anchor point of the rollup
 	Genesis Genesis `json:"genesis"`
 	// Seconds per L2 block
 	BlockTime uint64 `json:"block_time"`
-	// Sequencer batches may not be more than MaxSequencerDrift seconds after
-	// the L1 timestamp of their L1 origin time.
-	//
-	// Note: When L1 has many 1 second consecutive blocks, and L2 grows at fixed 2 seconds,
-	// the L2 time may still grow beyond this difference.
-	//
-	// With Fjord, the MaxSequencerDrift becomes a constant. Use the ChainSpec
-	// instead of reading this rollup configuration field directly to determine
-	// the max sequencer drift for a given block based on the block's L1 origin.
-	// Chains that activate Fjord at genesis may leave this field empty.
-	MaxSequencerDrift uint64 `json:"max_sequencer_drift,omitempty"`
 	// Number of epochs (L1 blocks) per sequencing window, including the epoch L1 origin block itself
 	SeqWindowSize uint64 `json:"seq_window_size"`
-	// Number of L1 blocks between when a channel can be opened and when it must be closed by.
-	ChannelTimeoutBedrock uint64 `json:"channel_timeout"`
 	// Required to verify L1 signatures
 	L1ChainID *big.Int `json:"l1_chain_id"`
 	// Required to identify the L2 network and create p2p signatures unique for this chain.
 	L2ChainID *big.Int `json:"l2_chain_id"`
-
-	// RegolithTime sets the activation time of the Regolith network-upgrade:
-	// a pre-mainnet Bedrock change that addresses findings of the Sherlock contest related to deposit attributes.
-	// "Regolith" is the loose deposited rock that sits on top of Bedrock.
-	// Active if RegolithTime != nil && L2 block timestamp >= *RegolithTime, inactive otherwise.
-	RegolithTime *uint64 `json:"regolith_time,omitempty"`
-
-	// CanyonTime sets the activation time of the Canyon network upgrade.
-	// Active if CanyonTime != nil && L2 block timestamp >= *CanyonTime, inactive otherwise.
-	CanyonTime *uint64 `json:"canyon_time,omitempty"`
-
-	// DeltaTime sets the activation time of the Delta network upgrade.
-	// Active if DeltaTime != nil && L2 block timestamp >= *DeltaTime, inactive otherwise.
-	DeltaTime *uint64 `json:"delta_time,omitempty"`
-
-	// EcotoneTime sets the activation time of the Ecotone network upgrade.
-	// Active if EcotoneTime != nil && L2 block timestamp >= *EcotoneTime, inactive otherwise.
-	EcotoneTime *uint64 `json:"ecotone_time,omitempty"`
-
-	// FjordTime sets the activation time of the Fjord network upgrade.
-	// Active if FjordTime != nil && L2 block timestamp >= *FjordTime, inactive otherwise.
-	FjordTime *uint64 `json:"fjord_time,omitempty"`
-
-	// GraniteTime sets the activation time of the Granite network upgrade.
-	// Active if GraniteTime != nil && L2 block timestamp >= *GraniteTime, inactive otherwise.
-	GraniteTime *uint64 `json:"granite_time,omitempty"`
-
-	// HoloceneTime sets the activation time of the Holocene network upgrade.
-	// Active if HoloceneTime != nil && L2 block timestamp >= *HoloceneTime, inactive otherwise.
-	HoloceneTime *uint64 `json:"holocene_time,omitempty"`
-
-	// IsthmusTime sets the activation time of the Isthmus network upgrade.
-	// Active if IsthmusTime != nil && L2 block timestamp >= *IsthmusTime, inactive otherwise.
-	IsthmusTime *uint64 `json:"isthmus_time,omitempty"`
-
-	// JovianTime sets the activation time of the Jovian network upgrade.
-	// Active if JovianTime != nil && L2 block timestamp >= *JovianTime, inactive otherwise.
-	JovianTime *uint64 `json:"jovian_time,omitempty"`
-
-	// KarstTime sets the activation time of the Karst network upgrade.
-	// Active if KarstTime != nil && L2 block timestamp >= *KarstTime, inactive otherwise.
-	KarstTime *uint64 `json:"karst_time,omitempty"`
-
-	// KeepKarstUpgradeGas opts out of the fix for the Karst upgrade-gas leak, where the
-	// one-time upgrade gas added to the Karst activation block was persisting on every later
-	// block instead of only the activation block.
-	// Defaults to false: the upgrade gas is subtracted again at the block right after the
-	// Karst activation block, so the gas limit reverts. Set to true only on chains that
-	// already activated Karst with the leak baked into their history — the inflated gas limit
-	// is kept, and the operator clears it themselves with a setGasLimit whenever they choose.
-	KeepKarstUpgradeGas bool `json:"keep_karst_upgrade_gas,omitempty"`
-
-	// LagoonTime sets the activation time for an experimental feature-set, activated like a hardfork.
-	// Active if LagoonTime != nil && L2 block timestamp >= *LagoonTime, inactive otherwise.
-	LagoonTime *uint64 `json:"lagoon_time,omitempty"`
 
 	// Note: below addresses are part of the block-derivation process,
 	// and required to be the same network-wide to stay in consensus.
@@ -162,19 +83,6 @@ type Config struct {
 	// parameters to the protocol values, like the execution layer does.
 	// If missing, it is loaded by the op-node from the embedded superchain config at startup.
 	ChainOpConfig *opparams.OptimismConfig `json:"chain_op_config,omitempty"`
-
-	// Optional Features
-
-	// AltDAConfig. We are in the process of migrating to the AltDAConfig from these legacy top level values
-	AltDAConfig *AltDAConfig `json:"alt_da,omitempty"`
-
-	// PectraBlobScheduleTime sets the time until which (but not including) the blob base fee
-	// calculations for the L1 Block Info use the pre-Prague=Cancun blob parameters.
-	// This feature is optional and if not active, the L1 Block Info calculation uses the Prague
-	// blob parameters for the first L1 Prague block, as was intended.
-	// This feature (de)activates by L1 origin timestamp, to keep a consistent L1 block info per L2
-	// epoch.
-	PectraBlobScheduleTime *uint64 `json:"pectra_blob_schedule_time,omitempty"`
 }
 
 // ValidateL1Config checks L1 config variables for errors.
@@ -314,14 +222,8 @@ func (cfg *Config) Check() error {
 	if cfg.BlockTime == 0 {
 		return ErrBlockTimeZero
 	}
-	if cfg.ChannelTimeoutBedrock == 0 {
-		return ErrMissingChannelTimeout
-	}
 	if cfg.SeqWindowSize < 2 {
 		return ErrInvalidSeqWindowSize
-	}
-	if cfg.MaxSequencerDrift == 0 {
-		return ErrInvalidMaxSeqDrift
 	}
 	if cfg.Genesis.L1.Hash == (common.Hash{}) {
 		return ErrMissingGenesisL1Hash
@@ -365,438 +267,11 @@ func (cfg *Config) Check() error {
 	if cfg.L2ChainID.Sign() < 1 {
 		return ErrL2ChainIDNotPositive
 	}
-	if err := validateAltDAConfig(cfg); err != nil {
-		return err
-	}
-
-	if err := cfg.checkForkOrder(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (cfg *Config) HasOptimismWithdrawalsRoot(timestamp uint64) bool {
-	return cfg.IsIsthmus(timestamp)
-}
-
-// ProbablyMissingPectraBlobSchedule returns whether the chain is likely missing the Pectra blob
-// schedule fix.
-// A chain probably needs the Pectra blob schedule fix if:
-// - its L1 in Holesky or Sepolia, and
-// - its genesis is before the L1's Prague activation.
-func (cfg *Config) ProbablyMissingPectraBlobSchedule() bool {
-	if cfg.PectraBlobScheduleTime != nil {
-		return false
-	}
-
-	var pragueTime uint64
-	if cfg.L1ChainID.Cmp(params.HoleskyChainConfig.ChainID) == 0 {
-		pragueTime = *params.HoleskyChainConfig.PragueTime
-	} else if cfg.L1ChainID.Cmp(params.SepoliaChainConfig.ChainID) == 0 {
-		pragueTime = *params.SepoliaChainConfig.PragueTime
-	} else {
-		// Only Holesky and Sepolia chains may have run into the
-		// Pectra blob schedule bug.
-		return false
-	}
-
-	// Only chains whose genesis was before the L1's prague activation need
-	// the Pectra blob schedule fix.
-	return pragueTime >= cfg.Genesis.L2Time
-}
-
-// validateAltDAConfig checks the two approaches to configuring alt-da mode.
-// If the legacy values are set, they are copied to the new location. If both are set, they are check for consistency.
-func validateAltDAConfig(cfg *Config) error {
-	if cfg.AltDAConfig != nil {
-		if !(cfg.AltDAConfig.CommitmentType == altda.KeccakCommitmentString || cfg.AltDAConfig.CommitmentType == altda.GenericCommitmentString) {
-			return fmt.Errorf("invalid commitment type: %v", cfg.AltDAConfig.CommitmentType)
-		}
-	}
-	return nil
-}
-
-// strictActivationOrderFrom is the first fork for which sharing a post-genesis activation
-// timestamp with its predecessor is rejected rather than merely unsupported.
-//
-// Simultaneous activation is not a supported configuration for any fork, but six chains in the
-// superchain registry were configured that way before the rule was written down — Celo mainnet
-// activated Holocene and Isthmus in the same block, and five Sepolia chains did the same for
-// earlier pairs. Their activations are chain history and cannot be changed, so op-node must keep
-// syncing them. Every one of those pairs predates Jovian, so enforcing from Jovian onwards rejects
-// new simultaneous activations without locking those chains out.
-const strictActivationOrderFrom = forks.Jovian
-
-// checkForkOrder checks that the scheduled mainline forks activate in the order given by
-// [forks.All]: a fork may only be scheduled if all of its predecessors are, and each fork must
-// activate after its predecessor.
-func (cfg *Config) checkForkOrder() error {
-	// forks.All starts at Bedrock, which is not activated by timestamp.
-	ordered := forks.From(forks.Regolith)
-	var strict bool
-	for i, name := range ordered[1:] {
-		strict = strict || name == strictActivationOrderFrom
-		if err := cfg.checkFork(ordered[i], name, strict); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// checkFork checks the activation time of fork B against that of fork A, its immediate
-// predecessor. Fork A must be scheduled if fork B is, and must activate before fork B.
-//
-// When strict is set, fork B may only share fork A's activation time at or before genesis, where
-// both activate in the genesis block and no activation-block processing happens. Past genesis,
-// activating two forks at the same timestamp is not supported: each fork's activation-block
-// behavior is only defined against a chain on which every preceding fork is already active, so
-// sharing an activation block leaves the combined behavior undefined. See the activation rules of
-// the superchain upgrades specification:
-// https://specs.optimism.io/protocol/superchain-upgrades.html#activation-rules
-func (cfg *Config) checkFork(aName, bName ForkName, strict bool) error {
-	a, b := cfg.ActivationTime(aName), cfg.ActivationTime(bName)
-	if b == nil {
-		return nil
-	}
-	if a == nil {
-		return fmt.Errorf("fork %s set (to %d), but prior fork %s missing", bName, *b, aName)
-	}
-	if *a > *b {
-		return fmt.Errorf("fork %s set to %d, but prior fork %s has higher offset %d", bName, *b, aName, *a)
-	}
-	if strict && *a == *b && *b > cfg.Genesis.L2Time {
-		return fmt.Errorf("fork %s and prior fork %s both set to %d, but activating multiple forks at the same time after genesis is not supported", bName, aName, *b)
-	}
 	return nil
 }
 
 func (c *Config) L1Signer() types.Signer {
 	return types.LatestSignerForChainID(c.L1ChainID)
-}
-
-func (c *Config) IsForkActive(fork ForkName, timestamp uint64) bool {
-	activationTime := c.ActivationTime(fork)
-	return activationTime != nil && timestamp >= *activationTime
-}
-
-// IsRegolith returns true if the Regolith hardfork is active at or past the given timestamp.
-func (c *Config) IsRegolith(timestamp uint64) bool {
-	return c.IsForkActive(forks.Regolith, timestamp)
-}
-
-// IsCanyon returns true if the Canyon hardfork is active at or past the given timestamp.
-func (c *Config) IsCanyon(timestamp uint64) bool {
-	return c.IsForkActive(forks.Canyon, timestamp)
-}
-
-// IsDelta returns true if the Delta hardfork is active at or past the given timestamp.
-func (c *Config) IsDelta(timestamp uint64) bool {
-	return c.IsForkActive(forks.Delta, timestamp)
-}
-
-// IsEcotone returns true if the Ecotone hardfork is active at or past the given timestamp.
-func (c *Config) IsEcotone(timestamp uint64) bool {
-	return c.IsForkActive(forks.Ecotone, timestamp)
-}
-
-// IsFjord returns true if the Fjord hardfork is active at or past the given timestamp.
-func (c *Config) IsFjord(timestamp uint64) bool {
-	return c.IsForkActive(forks.Fjord, timestamp)
-}
-
-// IsGranite returns true if the Granite hardfork is active at or past the given timestamp.
-func (c *Config) IsGranite(timestamp uint64) bool {
-	return c.IsForkActive(forks.Granite, timestamp)
-}
-
-// IsHolocene returns true if the Holocene hardfork is active at or past the given timestamp.
-func (c *Config) IsHolocene(timestamp uint64) bool {
-	return c.IsForkActive(forks.Holocene, timestamp)
-}
-
-// IsIsthmus returns true if the Isthmus hardfork is active at or past the given timestamp.
-func (c *Config) IsIsthmus(timestamp uint64) bool {
-	return c.IsForkActive(forks.Isthmus, timestamp)
-}
-
-// IsJovian returns true if the Jovian hardfork is active at or past the given timestamp.
-func (c *Config) IsJovian(timestamp uint64) bool {
-	return c.IsForkActive(forks.Jovian, timestamp)
-}
-
-// IsKarst returns true if the Karst hardfork is active at or past the given timestamp.
-func (c *Config) IsKarst(timestamp uint64) bool {
-	return c.IsForkActive(forks.Karst, timestamp)
-}
-
-// IsLagoon returns true if the Lagoon hardfork is active at or past the given timestamp.
-func (c *Config) IsLagoon(timestamp uint64) bool {
-	return c.IsForkActive(forks.Lagoon, timestamp)
-}
-
-func (c *Config) IsRegolithActivationBlock(l2BlockTime uint64) bool {
-	return c.IsRegolith(l2BlockTime) &&
-		l2BlockTime >= c.BlockTime &&
-		!c.IsRegolith(l2BlockTime-c.BlockTime)
-}
-
-func (c *Config) IsCanyonActivationBlock(l2BlockTime uint64) bool {
-	return c.IsCanyon(l2BlockTime) &&
-		l2BlockTime >= c.BlockTime &&
-		!c.IsCanyon(l2BlockTime-c.BlockTime)
-}
-
-func (c *Config) IsDeltaActivationBlock(l2BlockTime uint64) bool {
-	return c.IsDelta(l2BlockTime) &&
-		l2BlockTime >= c.BlockTime &&
-		!c.IsDelta(l2BlockTime-c.BlockTime)
-}
-
-// IsEcotoneActivationBlock returns whether the specified block is the first block subject to the
-// Ecotone upgrade. Ecotone activation at genesis does not count.
-func (c *Config) IsEcotoneActivationBlock(l2BlockTime uint64) bool {
-	return c.IsEcotone(l2BlockTime) &&
-		l2BlockTime >= c.BlockTime &&
-		!c.IsEcotone(l2BlockTime-c.BlockTime)
-}
-
-// IsFjordActivationBlock returns whether the specified block is the first block subject to the
-// Fjord upgrade.
-func (c *Config) IsFjordActivationBlock(l2BlockTime uint64) bool {
-	return c.IsFjord(l2BlockTime) &&
-		l2BlockTime >= c.BlockTime &&
-		!c.IsFjord(l2BlockTime-c.BlockTime)
-}
-
-// IsGraniteActivationBlock returns whether the specified block is the first block subject to the
-// Granite upgrade.
-func (c *Config) IsGraniteActivationBlock(l2BlockTime uint64) bool {
-	return c.IsGranite(l2BlockTime) &&
-		l2BlockTime >= c.BlockTime &&
-		!c.IsGranite(l2BlockTime-c.BlockTime)
-}
-
-// IsHoloceneActivationBlock returns whether the specified block is the first block subject to the
-// Holocene upgrade.
-func (c *Config) IsHoloceneActivationBlock(l2BlockTime uint64) bool {
-	return c.IsHolocene(l2BlockTime) &&
-		l2BlockTime >= c.BlockTime &&
-		!c.IsHolocene(l2BlockTime-c.BlockTime)
-}
-
-// IsIsthmusActivationBlock returns whether the specified block is the first block subject to the
-// Isthmus upgrade.
-func (c *Config) IsIsthmusActivationBlock(l2BlockTime uint64) bool {
-	return c.IsIsthmus(l2BlockTime) &&
-		l2BlockTime >= c.BlockTime &&
-		!c.IsIsthmus(l2BlockTime-c.BlockTime)
-}
-
-// IsJovianActivationBlock returns whether the specified block is the first block subject to the
-// Jovian upgrade.
-func (c *Config) IsJovianActivationBlock(l2BlockTime uint64) bool {
-	return c.IsJovian(l2BlockTime) &&
-		l2BlockTime >= c.BlockTime &&
-		!c.IsJovian(l2BlockTime-c.BlockTime)
-}
-
-// IsKarstActivationBlock returns whether the specified block is the first block subject to the
-// Karst upgrade.
-func (c *Config) IsKarstActivationBlock(l2BlockTime uint64) bool {
-	return c.IsKarst(l2BlockTime) &&
-		l2BlockTime >= c.BlockTime &&
-		!c.IsKarst(l2BlockTime-c.BlockTime)
-}
-
-// IsLagoonActivationBlock returns whether the specified block is the first block subject to the
-// Lagoon upgrade.
-func (c *Config) IsLagoonActivationBlock(l2BlockTime uint64) bool {
-	return c.IsLagoon(l2BlockTime) &&
-		l2BlockTime >= c.BlockTime &&
-		!c.IsLagoon(l2BlockTime-c.BlockTime)
-}
-
-func (c *Config) ActivationTime(fork ForkName) *uint64 {
-	// NEW FORKS MUST BE ADDED HERE
-	switch fork {
-	case forks.Lagoon:
-		return c.LagoonTime
-	case forks.Karst:
-		return c.KarstTime
-	case forks.Jovian:
-		return c.JovianTime
-	case forks.Isthmus:
-		return c.IsthmusTime
-	case forks.Holocene:
-		return c.HoloceneTime
-	case forks.Granite:
-		return c.GraniteTime
-	case forks.Fjord:
-		return c.FjordTime
-	case forks.Ecotone:
-		return c.EcotoneTime
-	case forks.Delta:
-		return c.DeltaTime
-	case forks.Canyon:
-		return c.CanyonTime
-	case forks.Regolith:
-		return c.RegolithTime
-
-	// Optional forks
-	case forks.PectraBlobSchedule:
-		return c.PectraBlobScheduleTime
-
-	default:
-		panic(fmt.Sprintf("unknown fork: %v", fork))
-	}
-}
-
-func (c *Config) SetActivationTime(fork ForkName, timestamp *uint64) {
-	// NEW FORKS MUST BE ADDED HERE
-	switch fork {
-	case forks.Lagoon:
-		c.LagoonTime = timestamp
-	case forks.Karst:
-		c.KarstTime = timestamp
-	case forks.Jovian:
-		c.JovianTime = timestamp
-	case forks.Isthmus:
-		c.IsthmusTime = timestamp
-	case forks.Holocene:
-		c.HoloceneTime = timestamp
-	case forks.Granite:
-		c.GraniteTime = timestamp
-	case forks.Fjord:
-		c.FjordTime = timestamp
-	case forks.Ecotone:
-		c.EcotoneTime = timestamp
-	case forks.Delta:
-		c.DeltaTime = timestamp
-	case forks.Canyon:
-		c.CanyonTime = timestamp
-	case forks.Regolith:
-		c.RegolithTime = timestamp
-
-	// Optional forks
-	case forks.PectraBlobSchedule:
-		c.PectraBlobScheduleTime = timestamp
-
-	default:
-		panic(fmt.Sprintf("unknown fork: %v", fork))
-	}
-}
-
-// IsActivationBlock returns the fork which activates at the block with time newTime if the previous
-// block's time is oldTime. It returns an empty ForkName if no fork activation takes place between
-// those timestamps. It can be used for both, L1 and L2 blocks.
-func (c *Config) IsActivationBlock(oldTime, newTime uint64) ForkName {
-	for _, fork := range scheduleableForks {
-		if c.IsForkActive(fork, newTime) && !c.IsForkActive(fork, oldTime) {
-			return fork
-		}
-	}
-	return forks.None
-}
-
-func (c *Config) IsActivationBlockForFork(l2BlockTime uint64, fork ForkName) bool {
-	return l2BlockTime >= c.BlockTime &&
-		!c.IsForkActive(fork, l2BlockTime-c.BlockTime) &&
-		c.IsForkActive(fork, l2BlockTime)
-}
-
-// ActivateAtGenesis updates the config to activate the given fork and all previous forks at genesis
-// and all later forks are disabled.
-func (c *Config) ActivateAtGenesis(hardfork ForkName) {
-	c.ActivateAt(hardfork, 0)
-}
-
-var scheduleableForks = forks.From(forks.Regolith)
-
-// ActivateAt updates the config to activate the given fork at the given timestamp, all previous
-// forks at genesis, and all later forks are disabled.
-func (c *Config) ActivateAt(fork ForkName, timestamp uint64) {
-	if !forks.IsValid(fork) {
-		panic(fmt.Sprintf("invalid fork: %s", fork))
-	}
-	ts := new(uint64)
-	// Special case: if only activating Bedrock, all scheduleable forks are disabled.
-	if fork == forks.Bedrock {
-		ts = nil
-	}
-	for i, f := range scheduleableForks {
-		if f == fork {
-			c.SetActivationTime(fork, &timestamp)
-			ts = nil
-		} else {
-			c.SetActivationTime(scheduleableForks[i], ts)
-		}
-	}
-}
-
-// ForkchoiceUpdatedVersion returns the EngineAPIMethod suitable for the chain hard fork version.
-func (c *Config) ForkchoiceUpdatedVersion(attr *eth.PayloadAttributes) eth.EngineAPIMethod {
-	if attr == nil {
-		// Don't begin payload build process.
-		return eth.FCUV3
-	}
-	ts := uint64(attr.Timestamp)
-	if c.IsEcotone(ts) {
-		// Cancun
-		return eth.FCUV3
-	} else if c.IsCanyon(ts) {
-		// Shanghai
-		return eth.FCUV2
-	} else {
-		// According to Ethereum engine API spec, we can use fcuV2 here,
-		// but upstream Geth v1.13.11 does not accept V2 before Shanghai.
-		return eth.FCUV1
-	}
-}
-
-// NewPayloadVersion returns the EngineAPIMethod suitable for the chain hard fork version.
-func (c *Config) NewPayloadVersion(timestamp uint64) eth.EngineAPIMethod {
-	if c.IsIsthmus(timestamp) {
-		return eth.NewPayloadV4
-	} else if c.IsEcotone(timestamp) {
-		// Cancun
-		return eth.NewPayloadV3
-	} else {
-		return eth.NewPayloadV2
-	}
-}
-
-// GetPayloadVersion returns the EngineAPIMethod suitable for the chain hard fork version.
-func (c *Config) GetPayloadVersion(timestamp uint64) eth.EngineAPIMethod {
-	if c.IsKarst(timestamp) {
-		// Osaka
-		return eth.GetPayloadV5
-	} else if c.IsIsthmus(timestamp) {
-		return eth.GetPayloadV4
-	} else if c.IsEcotone(timestamp) {
-		// Cancun
-		return eth.GetPayloadV3
-	} else {
-		return eth.GetPayloadV2
-	}
-}
-
-// GetOPAltDAConfig validates and returns the altDA config from the rollup config.
-func (c *Config) GetOPAltDAConfig() (altda.Config, error) {
-	if c.AltDAConfig == nil {
-		return altda.Config{}, errors.New("no altDA config")
-	}
-	t, err := altda.CommitmentTypeFromString(c.AltDAConfig.CommitmentType)
-	if err != nil {
-		return altda.Config{}, err
-	}
-	return altda.Config{
-		CommitmentType: t,
-	}, nil
-}
-
-func (c *Config) AltDAEnabled() bool {
-	return c.AltDAConfig != nil
 }
 
 // SyncLookback computes the number of blocks to walk back in order to find the correct L1 origin.
@@ -829,18 +304,7 @@ func (c *Config) Description(l2Chains map[string]string) string {
 	banner += fmt.Sprintf("  L2 starting time: %d ~ %s\n", c.Genesis.L2Time, fmtTime(c.Genesis.L2Time))
 	banner += fmt.Sprintf("  L2 block: %s %d\n", c.Genesis.L2.Hash, c.Genesis.L2.Number)
 	banner += fmt.Sprintf("  L1 block: %s %d\n", c.Genesis.L1.Hash, c.Genesis.L1.Number)
-	// Report the upgrade configuration
-	banner += "Post-Bedrock Network Upgrades (timestamp based):\n"
-	c.forEachFork(func(name string, _ string, time *uint64) {
-		banner += fmt.Sprintf("  - %v: %s\n", name, fmtForkTimeOrUnset(time))
-	})
-	if c.KeepKarstUpgradeGas {
-		// Only reported when set, since it is an opt-out behavioral flag, not a scheduled time.
-		banner += "Keep Karst upgrade gas: true\n"
-	}
-	if c.AltDAConfig != nil {
-		banner += fmt.Sprintf("Node supports Alt-DA Mode with CommitmentType %v\n", c.AltDAConfig.CommitmentType)
-	}
+	banner += "Network upgrades: all up to Jovian active at genesis\n"
 	return banner
 }
 
@@ -869,35 +333,7 @@ func (c *Config) LogDescription(log log.Logger, l2Chains map[string]string) {
 		"l1_block_hash", c.Genesis.L1.Hash.String(),
 		"l1_block_number", c.Genesis.L1.Number,
 	)
-	c.forEachFork(func(_ string, logName string, time *uint64) {
-		ctx = append(ctx, logName, fmtForkTimeOrUnset(time))
-	})
-	if c.KeepKarstUpgradeGas {
-		// Only reported when set, since it is an opt-out behavioral flag, not a scheduled time.
-		ctx = append(ctx, "keep_karst_upgrade_gas", true)
-	}
-	if c.AltDAConfig != nil {
-		ctx = append(ctx, "alt_da", *c.AltDAConfig)
-	}
 	log.Info("Rollup Config", ctx...)
-}
-
-func (c *Config) forEachFork(callback func(name string, logName string, time *uint64)) {
-	callback("Regolith", "regolith_time", c.RegolithTime)
-	callback("Canyon", "canyon_time", c.CanyonTime)
-	callback("Delta", "delta_time", c.DeltaTime)
-	callback("Ecotone", "ecotone_time", c.EcotoneTime)
-	callback("Fjord", "fjord_time", c.FjordTime)
-	callback("Granite", "granite_time", c.GraniteTime)
-	callback("Holocene", "holocene_time", c.HoloceneTime)
-	if c.PectraBlobScheduleTime != nil {
-		// only report if config is set
-		callback("Pectra Blob Schedule", "pectra_blob_schedule_time", c.PectraBlobScheduleTime)
-	}
-	callback("Isthmus", "isthmus_time", c.IsthmusTime)
-	callback("Jovian", "jovian_time", c.JovianTime)
-	callback("Karst", "karst_time", c.KarstTime)
-	callback("Lagoon", "lagoon_time", c.LagoonTime)
 }
 
 func (c *Config) ParseRollupConfig(in io.Reader) error {
@@ -906,16 +342,6 @@ func (c *Config) ParseRollupConfig(in io.Reader) error {
 		return fmt.Errorf("failed to decode rollup config: %w", err)
 	}
 	return nil
-}
-
-func fmtForkTimeOrUnset(v *uint64) string {
-	if v == nil {
-		return "(not configured)"
-	}
-	if *v == 0 { // don't output the unix epoch time if it's really just activated at genesis.
-		return "@ genesis"
-	}
-	return fmt.Sprintf("@ %-10v ~ %s", *v, fmtTime(*v))
 }
 
 func fmtTime(v uint64) string {

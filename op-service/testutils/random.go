@@ -423,32 +423,3 @@ func RandomBlob(rng *rand.Rand) (kzg4844.Blob, kzg4844.Commitment, error) {
 
 	return blob, commitment, err
 }
-
-func RandomOutputResponse(rng *rand.Rand) *eth.OutputResponse {
-	return &eth.OutputResponse{
-		Version:               eth.Bytes32(RandomHash(rng)),
-		OutputRoot:            eth.Bytes32(RandomHash(rng)),
-		BlockRef:              RandomL2BlockRef(rng),
-		WithdrawalStorageRoot: RandomHash(rng),
-		StateRoot:             RandomHash(rng),
-		Status: &eth.SyncStatus{
-			CurrentL1:          RandomBlockRef(rng),
-			CurrentL1Finalized: RandomBlockRef(rng),
-			HeadL1:             RandomBlockRef(rng),
-			SafeL1:             RandomBlockRef(rng),
-			FinalizedL1:        RandomBlockRef(rng),
-			UnsafeL2:           RandomL2BlockRef(rng),
-			SafeL2:             RandomL2BlockRef(rng),
-			FinalizedL2:        RandomL2BlockRef(rng),
-			PendingSafeL2:      RandomL2BlockRef(rng),
-		},
-	}
-}
-
-func RandomOutputV0(rng *rand.Rand) *eth.OutputV0 {
-	return &eth.OutputV0{
-		StateRoot:                eth.Bytes32(RandomHash(rng)),
-		MessagePasserStorageRoot: eth.Bytes32(RandomHash(rng)),
-		BlockHash:                RandomHash(rng),
-	}
-}

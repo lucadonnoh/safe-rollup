@@ -16,7 +16,6 @@ import (
 
 type Metrics interface {
 	RecordPipelineReset()
-	RecordFollowSourceRequest(result string)
 	RecordPublishingError()
 	RecordDroppedPublish()
 	RecordDerivationError()
@@ -61,17 +60,6 @@ type DerivationPipeline interface {
 	Origin() eth.L1BlockRef
 	DerivationReady() bool
 	ConfirmEngineReset()
-}
-
-type AttributesHandler interface {
-	// HasAttributes returns if there are any block attributes to process.
-	// HasAttributes is for EngineQueue testing only, and can be removed when attribute processing is fully independent.
-	HasAttributes() bool
-	// SetAttributes overwrites the set of attributes. This may be nil, to clear what may be processed next.
-	SetAttributes(attributes *derive.AttributesWithParent)
-	// Proceed runs one attempt of processing attributes, if any.
-	// Proceed returns io.EOF if there are no attributes to process.
-	Proceed(ctx context.Context) error
 }
 
 type Finalizer interface {

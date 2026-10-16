@@ -13,7 +13,6 @@ import (
 func TestTxmgrRPC(t *testing.T) {
 	minBaseFeeInit := big.NewInt(2000)
 	minPriorityFeeInit := big.NewInt(1000)
-	minBlobFeeInit := big.NewInt(3000)
 	feeThresholdInit := big.NewInt(4000)
 	rebroadcastIntervalInit := int64(25)
 	bumpFeeRetryTimeInit := int64(100)
@@ -21,7 +20,6 @@ func TestTxmgrRPC(t *testing.T) {
 	cfg := configWithNumConfs(1)
 	cfg.MinBaseFee.Store(minBaseFeeInit)
 	cfg.MinTipCap.Store(minPriorityFeeInit)
-	cfg.MinBlobTxFee.Store(minBlobFeeInit)
 	cfg.FeeLimitThreshold.Store(feeThresholdInit)
 	cfg.RebroadcastInterval.Store(rebroadcastIntervalInit)
 	cfg.ResubmissionTimeout.Store(bumpFeeRetryTimeInit)
@@ -51,7 +49,6 @@ func TestTxmgrRPC(t *testing.T) {
 	cases := []tcase{
 		{"MinBaseFee", minBaseFeeInit},
 		{"MinPriorityFee", minPriorityFeeInit},
-		{"MinBlobFee", minBlobFeeInit},
 		{"FeeThreshold", feeThresholdInit},
 		{"RebroadcastInterval", big.NewInt(rebroadcastIntervalInit)},
 		{"BumpFeeRetryTime", big.NewInt(bumpFeeRetryTimeInit)},
@@ -72,19 +69,4 @@ func TestTxmgrRPC(t *testing.T) {
 			require.Equal(t, newVal, res)
 		})
 	}
-
-	t.Run("Get|SetBlobTipCapDynamic", func(t *testing.T) {
-		var res bool
-
-		require.NoError(t, rpcClient.Call(&res, "txmgr_getBlobTipCapDynamic"))
-		require.False(t, res)
-
-		require.NoError(t, rpcClient.Call(nil, "txmgr_setBlobTipCapDynamic", true))
-		require.NoError(t, rpcClient.Call(&res, "txmgr_getBlobTipCapDynamic"))
-		require.True(t, res)
-
-		require.NoError(t, rpcClient.Call(nil, "txmgr_setBlobTipCapDynamic", false))
-		require.NoError(t, rpcClient.Call(&res, "txmgr_getBlobTipCapDynamic"))
-		require.False(t, res)
-	})
 }

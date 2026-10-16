@@ -11,8 +11,6 @@ import (
 )
 
 var (
-	// ErrPayloadDenied is returned when a payload is denied by the SuperAuthority denylist.
-	ErrPayloadDenied = errors.New("payload denied by SuperAuthority")
 	// ErrPayloadInvalid is returned when a payload's execution is invalid.
 	ErrPayloadInvalid = errors.New("payload execution invalid")
 )
@@ -47,7 +45,7 @@ func (e *EngineController) onPayloadProcess(ctx context.Context, ev PayloadProce
 	})
 }
 
-// processNewPayload handles the SuperAuthority check and NewPayload RPC call.
+// processNewPayload handles the NewPayload RPC call.
 // It does NOT acquire e.mu (caller is responsible).
 // Returns the instants engine_newPayload started and returned, or an error. The
 // second is what lets a caller price the newPayload call on its own, separately
@@ -56,34 +54,6 @@ func (e *EngineController) onPayloadProcess(ctx context.Context, ev PayloadProce
 func (e *EngineController) processNewPayload(ctx context.Context, envelope *eth.ExecutionPayloadEnvelope, ref eth.L2BlockRef, derivedFrom eth.L1BlockRef) (time.Time, time.Time, error) {
 	rpcCtx, cancel := context.WithTimeout(e.ctx, payloadProcessTimeout)
 	defer cancel()
-
-	// Check SuperAuthority denylist before inserting the payload
-	if e.superAuthority != nil && envelope != nil && envelope.ExecutionPayload != nil {
-		payload := envelope.ExecutionPayload
-		denied, err := e.superAuthority.IsDenied(uint64(payload.BlockNumber), payload.BlockHash)
-		if err != nil {
-			e.log.Error("Failed to check SuperAuthority denylist, proceeding with payload",
-				"blockNumber", payload.BlockNumber,
-				"blockHash", payload.BlockHash,
-				"err", err,
-			)
-		} else if denied {
-			if derivedFrom != (eth.L1BlockRef{}) {
-				e.log.Warn("Requesting deposits-only replacement for derived payload",
-					"blockNumber", payload.BlockNumber,
-					"blockHash", payload.BlockHash,
-					"derivedFrom", derivedFrom,
-				)
-				e.emitDepositsOnlyPayloadAttributesRequest(ctx, ref.ParentID(), derivedFrom)
-			} else {
-				e.log.Warn("Unsafe payload denied by SuperAuthority, dropping",
-					"blockNumber", payload.BlockNumber,
-					"blockHash", payload.BlockHash,
-				)
-			}
-			return time.Time{}, time.Time{}, ErrPayloadDenied
-		}
-	}
 
 	insertStart := time.Now()
 	status, err := e.engine.NewPayload(rpcCtx,
@@ -98,7 +68,7 @@ func (e *EngineController) processNewPayload(ctx context.Context, envelope *eth.
 	case eth.ExecutionInvalid, eth.ExecutionInvalidBlockHash:
 		// Depending on execution engine, not all block-validity checks run immediately on build-start
 		// at the time of the forkchoiceUpdated engine-API call, nor during getPayload.
-		if derivedFrom != (eth.L1BlockRef{}) && e.rollupCfg.IsHolocene(derivedFrom.Time) {
+		if derivedFrom != (eth.L1BlockRef{}) {
 			e.emitDepositsOnlyPayloadAttributesRequest(ctx, ref.ParentID(), derivedFrom)
 			return time.Time{}, time.Time{}, ErrPayloadInvalid
 		}

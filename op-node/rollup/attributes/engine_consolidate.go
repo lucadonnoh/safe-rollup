@@ -121,11 +121,10 @@ func checkExtraDataParamsMatch(cfg *rollup.Config, blockTimestamp uint64, attrPa
 		}
 
 		// Decode block parameters and check for mismatch
-		err := eip1559.ValidateOptimismExtraData(cfg, blockTimestamp, blockExtraData)
-		if err != nil {
+		if err := eip1559.ValidateJovianExtraData(blockExtraData); err != nil {
 			return fmt.Errorf("invalid block extraData: %w", err)
 		}
-		bd, be, bm := eip1559.DecodeOptimismExtraData(cfg, blockTimestamp, blockExtraData)
+		bd, be, bm := eip1559.DecodeJovianExtraData(blockExtraData)
 
 		if ad != bd || ae != be {
 			extraErr := ""
@@ -154,37 +153,17 @@ func checkWithdrawals(rollupCfg *rollup.Config, attrs *eth.PayloadAttributes, bl
 	attrWithdrawals := attrs.Withdrawals
 	blockWithdrawals := block.Withdrawals
 
-	isCanyon := rollupCfg.IsCanyon(uint64(block.Timestamp))
-	isIsthmus := rollupCfg.IsIsthmus(uint64(block.Timestamp))
-
-	if isCanyon {
-		// canyon: the withdrawals list should be non nil and empty
-		if blockWithdrawals == nil || len(*blockWithdrawals) != 0 {
-			return fmt.Errorf("%w: block", ErrCanyonMustHaveWithdrawals)
-		}
-		if attrWithdrawals == nil || len(*attrWithdrawals) != 0 {
-			return fmt.Errorf("%w: attributes", ErrCanyonMustHaveWithdrawals)
-		}
-		if !isIsthmus {
-			// canyon: the withdrawals root should be set to the empty withdrawals hash
-			if block.WithdrawalsRoot != nil && *block.WithdrawalsRoot != types.EmptyWithdrawalsHash {
-				return fmt.Errorf("%w: got %v", ErrCanyonWithdrawalsRoot, *block.WithdrawalsRoot)
-			}
-		}
-	} else {
-		// bedrock: the withdrawals list should be nil
-		if attrWithdrawals != nil {
-			return fmt.Errorf("%w: got %d", ErrBedrockMustHaveEmptyWithdrawals, len(*attrWithdrawals))
-		}
+	// The withdrawals list should be non nil and empty
+	if blockWithdrawals == nil || len(*blockWithdrawals) != 0 {
+		return fmt.Errorf("%w: block", ErrCanyonMustHaveWithdrawals)
 	}
-
-	if isIsthmus {
-		// isthmus: the withdrawals root should be non nil
-		if block.WithdrawalsRoot == nil {
-			return ErrIsthmusMustHaveWithdrawalsRoot
-		}
+	if attrWithdrawals == nil || len(*attrWithdrawals) != 0 {
+		return fmt.Errorf("%w: attributes", ErrCanyonMustHaveWithdrawals)
 	}
-
+	// The withdrawals root holds the message passer storage root
+	if block.WithdrawalsRoot == nil {
+		return ErrIsthmusMustHaveWithdrawalsRoot
+	}
 	return nil
 }
 
@@ -201,8 +180,8 @@ func logL1InfoTxns(rollupCfg *rollup.Config, l log.Logger, l2Number, l2Timestamp
 	}
 
 	// Then decode the ABI encoded parameters
-	safeInfo, errSafe := derive.L1BlockInfoFromBytes(rollupCfg, l2Timestamp, safeTxValue.Data())
-	unsafeInfo, errUnsafe := derive.L1BlockInfoFromBytes(rollupCfg, l2Timestamp, unsafeTxValue.Data())
+	safeInfo, errSafe := derive.L1BlockInfoFromBytes(safeTxValue.Data())
+	unsafeInfo, errUnsafe := derive.L1BlockInfoFromBytes(unsafeTxValue.Data())
 	if errSafe != nil || errUnsafe != nil {
 		l.Error("failed to umarshal l1 info", "errSafe", errSafe, "errUnsafe", errUnsafe)
 		return
@@ -216,19 +195,13 @@ func logL1InfoTxns(rollupCfg *rollup.Config, l log.Logger, l2Number, l2Timestamp
 		"unsafe_l1_time", unsafeInfo.Time, "unsafe_seq_num", unsafeInfo.SequenceNumber,
 		"unsafe_l1_basefee", unsafeInfo.BaseFee, "unsafe_batcher_addr", unsafeInfo.BatcherAddr,
 	)
-	if bytes.HasPrefix(safeTxValue.Data(), derive.L1InfoFuncEcotoneBytes4) {
-		l.Error("L1 Info transaction differs",
-			"safe_l1_blob_basefee", safeInfo.BlobBaseFee,
-			"safe_l1_basefee_scalar", safeInfo.BaseFeeScalar,
-			"safe_l1_blob_basefee_scalar", safeInfo.BlobBaseFeeScalar,
-			"unsafe_l1_blob_basefee", unsafeInfo.BlobBaseFee,
-			"unsafe_l1_basefee_scalar", unsafeInfo.BaseFeeScalar,
-			"unsafe_l1_blob_basefee_scalar", unsafeInfo.BlobBaseFeeScalar)
-	} else {
-		l.Error("L1 Info transaction differs",
-			"safe_gpo_scalar", safeInfo.L1FeeScalar, "safe_gpo_overhead", safeInfo.L1FeeOverhead,
-			"unsafe_gpo_scalar", unsafeInfo.L1FeeScalar, "unsafe_gpo_overhead", unsafeInfo.L1FeeOverhead)
-	}
+	l.Error("L1 Info transaction differs",
+		"safe_l1_blob_basefee", safeInfo.BlobBaseFee,
+		"safe_l1_basefee_scalar", safeInfo.BaseFeeScalar,
+		"safe_l1_blob_basefee_scalar", safeInfo.BlobBaseFeeScalar,
+		"unsafe_l1_blob_basefee", unsafeInfo.BlobBaseFee,
+		"unsafe_l1_basefee_scalar", unsafeInfo.BaseFeeScalar,
+		"unsafe_l1_blob_basefee_scalar", unsafeInfo.BlobBaseFeeScalar)
 }
 
 func getMissingTxnHashes(l log.Logger, safeTxns, unsafeTxns []hexutil.Bytes) ([]common.Hash, []common.Hash, error) {

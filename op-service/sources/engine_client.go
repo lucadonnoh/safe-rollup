@@ -37,7 +37,7 @@ func NewEngineClient(client client.RPC, log log.Logger, metrics caching.Metrics,
 		return nil, err
 	}
 
-	engineAPIClient := NewEngineAPIClient(client, log, config.RollupCfg)
+	engineAPIClient := NewEngineAPIClient(client, log)
 
 	return &EngineClient{
 		L2Client:        l2Client,
@@ -49,26 +49,16 @@ func NewEngineClient(client client.RPC, log log.Logger, metrics caching.Metrics,
 type EngineAPIClient struct {
 	RPC client.RPC
 	log log.Logger
-	evp EngineVersionProvider
 }
 
-type EngineVersionProvider interface {
-	ForkchoiceUpdatedVersion(attr *eth.PayloadAttributes) eth.EngineAPIMethod
-	NewPayloadVersion(timestamp uint64) eth.EngineAPIMethod
-	GetPayloadVersion(timestamp uint64) eth.EngineAPIMethod
-}
-
-func NewEngineAPIClient(rpc client.RPC, l log.Logger, evp EngineVersionProvider) *EngineAPIClient {
+// NewEngineAPIClient talks to an execution engine on which every fork through Jovian (Prague on L1
+// terms) is active, so it always uses forkchoiceUpdatedV3, newPayloadV4 and getPayloadV4.
+func NewEngineAPIClient(rpc client.RPC, l log.Logger) *EngineAPIClient {
 	return &EngineAPIClient{
 		RPC: rpc,
 		log: l,
-		evp: evp,
 	}
 }
-
-// EngineVersionProvider returns the underlying engine version provider used for
-// resolving the correct Engine API versions.
-func (s *EngineAPIClient) EngineVersionProvider() EngineVersionProvider { return s.evp }
 
 // ForkchoiceUpdate updates the forkchoice on the execution client. If attributes is not nil, the engine client will also begin building a block
 // based on attributes after the new head block and return the payload ID.
@@ -78,8 +68,7 @@ func (s *EngineAPIClient) ForkchoiceUpdate(ctx context.Context, fc *eth.Forkchoi
 	tlog := llog.New("attr", attributes) // trace logger
 	tlog.Trace("Sharing forkchoice-updated signal")
 	var result eth.ForkchoiceUpdatedResult
-	method := s.evp.ForkchoiceUpdatedVersion(attributes)
-	err := s.RPC.CallContext(ctx, &result, string(method), fc, attributes)
+	err := s.RPC.CallContext(ctx, &result, string(eth.FCUV3), fc, attributes)
 	if err != nil {
 		llog.Warn("Failed to share forkchoice-updated signal", "err", err)
 		return nil, err
@@ -100,17 +89,7 @@ func (s *EngineAPIClient) NewPayload(ctx context.Context, payload *eth.Execution
 
 	var result eth.PayloadStatusV1
 
-	var err error
-	switch method := s.evp.NewPayloadVersion(uint64(payload.Timestamp)); method {
-	case eth.NewPayloadV4:
-		err = s.RPC.CallContext(ctx, &result, string(method), payload, []common.Hash{}, parentBeaconBlockRoot, []hexutil.Bytes{})
-	case eth.NewPayloadV3:
-		err = s.RPC.CallContext(ctx, &result, string(method), payload, []common.Hash{}, parentBeaconBlockRoot)
-	case eth.NewPayloadV2:
-		err = s.RPC.CallContext(ctx, &result, string(method), payload)
-	default:
-		return nil, fmt.Errorf("unsupported NewPayload version: %s", method)
-	}
+	err := s.RPC.CallContext(ctx, &result, string(eth.NewPayloadV4), payload, []common.Hash{}, parentBeaconBlockRoot, []hexutil.Bytes{})
 
 	e.Trace("Received payload execution result", "status", result.Status, "latestValidHash", result.LatestValidHash, "message", result.ValidationError)
 	if err != nil {
@@ -126,8 +105,7 @@ func (s *EngineAPIClient) GetPayload(ctx context.Context, payloadInfo eth.Payloa
 	e := s.log.New("payload_id", payloadInfo.ID)
 	e.Trace("getting payload")
 	var result eth.ExecutionPayloadEnvelope
-	method := s.evp.GetPayloadVersion(payloadInfo.Timestamp)
-	err := s.RPC.CallContext(ctx, &result, string(method), payloadInfo.ID)
+	err := s.RPC.CallContext(ctx, &result, string(eth.GetPayloadV4), payloadInfo.ID)
 	if err != nil {
 		e.Warn("Failed to get payload", "payload_id", payloadInfo.ID, "err", err)
 		return nil, err

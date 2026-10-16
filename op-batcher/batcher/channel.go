@@ -110,34 +110,22 @@ func (c *channel) noneSubmitted() bool {
 	return len(c.confirmedTransactions) == 0 && len(c.pendingTransactions) == 0
 }
 
-// NextTxData dequeues the next frames from the channel and returns them encoded in a tx data packet.
-// If cfg.UseBlobs is false, it returns txData with a single frame.
-// If cfg.UseBlobs is true, it will read frames from its channel builder
-// until it either doesn't have more frames or the target number of frames is reached.
+// NextTxData dequeues the next frame from the channel and returns it as a tx data packet. Each
+// frame is posted to the DA server on its own and committed to L1 in its own transaction.
 //
 // NextTxData should only be called after HasTxData returned true.
 func (c *channel) NextTxData() txData {
-	nf := c.cfg.MaxFramesPerTx()
-	txdata := txData{frames: make([]frameData, 0, nf), asBlob: c.cfg.UseBlobs}
-	for i := 0; i < nf && c.HasPendingFrame(); i++ {
-		frame := c.NextFrame()
-		txdata.frames = append(txdata.frames, frame)
-	}
+	txdata := singleFrameTxData(c.NextFrame())
 
 	id := txdata.ID().String()
-	c.log.Debug("returning next tx data", "id", id, "num_frames", len(txdata.frames), "as_blob", txdata.asBlob)
+	c.log.Debug("returning next tx data", "id", id, "num_frames", len(txdata.frames))
 	c.pendingTransactions[id] = txdata
 
 	return txdata
 }
 
 func (c *channel) HasTxData() bool {
-	if c.IsFull() || // If the channel is full, we should start to submit it
-		!c.cfg.UseBlobs { // If using calldata, we only send one frame per tx
-		return c.HasPendingFrame()
-	}
-	// Collect enough frames if channel is not full yet
-	return c.PendingFrames() >= int(c.cfg.MaxFramesPerTx())
+	return c.HasPendingFrame()
 }
 
 func (c *channel) MaxInclusionBlock() uint64 {

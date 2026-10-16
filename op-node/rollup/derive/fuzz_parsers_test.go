@@ -33,58 +33,33 @@ func BytesToBigInt(b []byte) *big.Int {
 	return new(big.Int).SetBytes(cap_byte_slice(b, 32))
 }
 
-// FuzzL1InfoBedrockRoundTrip checks that our Bedrock l1 info encoder round trips properly
-func FuzzL1InfoBedrockRoundTrip(f *testing.F) {
-	f.Fuzz(func(t *testing.T, number, time uint64, baseFee, hash []byte, seqNumber uint64) {
+// FuzzL1InfoJovianRoundTrip checks that our Jovian encoder round trips properly
+func FuzzL1InfoJovianRoundTrip(f *testing.F) {
+	f.Fuzz(func(t *testing.T, number, time uint64, baseFee, blobBaseFee, hash []byte, seqNumber uint64, baseFeeScalar, blobBaseFeeScalar, operatorFeeScalar uint32, operatorFeeConstant uint64, daFootprintGasScalar uint16) {
 		in := L1BlockInfo{
-			Number:         number,
-			Time:           time,
-			BaseFee:        BytesToBigInt(baseFee),
-			BlockHash:      common.BytesToHash(hash),
-			SequenceNumber: seqNumber,
+			Number:               number,
+			Time:                 time,
+			BaseFee:              BytesToBigInt(baseFee),
+			BlockHash:            common.BytesToHash(hash),
+			SequenceNumber:       seqNumber,
+			BlobBaseFee:          BytesToBigInt(blobBaseFee),
+			BaseFeeScalar:        baseFeeScalar,
+			BlobBaseFeeScalar:    blobBaseFeeScalar,
+			OperatorFeeScalar:    operatorFeeScalar,
+			OperatorFeeConstant:  operatorFeeConstant,
+			DAFootprintGasScalar: daFootprintGasScalar,
 		}
-		enc, err := in.marshalBinaryBedrock()
+		enc, err := in.marshalBinaryJovian()
 		if err != nil {
-			t.Fatalf("Failed to marshal binary: %v", err)
+			t.Fatalf("Failed to marshal Jovian binary: %v", err)
 		}
 		var out L1BlockInfo
-		err = out.unmarshalBinaryBedrock(enc)
+		err = out.unmarshalBinaryJovian(enc)
 		if err != nil {
-			t.Fatalf("Failed to unmarshal binary: %v", err)
+			t.Fatalf("Failed to unmarshal Jovian binary: %v", err)
 		}
 		if !cmp.Equal(in, out, cmp.Comparer(testutils.BigEqual)) {
-			t.Fatalf("The data did not round trip correctly. in: %v. out: %v", in, out)
-		}
-	})
-}
-
-// FuzzL1InfoEcotoneRoundTrip checks that our Ecotone encoder round trips properly
-func FuzzL1InfoEcotoneRoundTrip(f *testing.F) {
-	f.Fuzz(func(t *testing.T, number, time uint64, baseFee, blobBaseFee, hash []byte, seqNumber uint64, baseFeeScalar, blobBaseFeeScalar uint32) {
-		in := L1BlockInfo{
-			Number:            number,
-			Time:              time,
-			BaseFee:           BytesToBigInt(baseFee),
-			BlockHash:         common.BytesToHash(hash),
-			SequenceNumber:    seqNumber,
-			BlobBaseFee:       BytesToBigInt(blobBaseFee),
-			BaseFeeScalar:     baseFeeScalar,
-			BlobBaseFeeScalar: blobBaseFeeScalar,
-		}
-		enc, err := in.marshalBinaryEcotone()
-		if err != nil {
-			t.Fatalf("Failed to marshal Ecotone binary: %v", err)
-		}
-		var out L1BlockInfo
-		err = out.unmarshalBinaryEcotone(enc)
-		if err != nil {
-			t.Fatalf("Failed to unmarshal Ecotone binary: %v", err)
-		}
-		if !cmp.Equal(in, out, cmp.Comparer(testutils.BigEqual)) {
-			t.Fatalf("The Ecotone data did not round trip correctly. in: %v. out: %v", in, out)
-		}
-		if !cmp.Equal(in, out, cmp.Comparer(testutils.BigEqual)) {
-			t.Fatalf("The Interop data did not round trip correctly. in: %v. out: %v", in, out)
+			t.Fatalf("The Jovian data did not round trip correctly. in: %v. out: %v", in, out)
 		}
 	})
 }

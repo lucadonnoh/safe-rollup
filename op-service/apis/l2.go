@@ -26,14 +26,8 @@ type SystemConfigFetcher interface {
 	SystemConfigByL2Hash(ctx context.Context, hash common.Hash) (eth.SystemConfig, error)
 }
 
-type OutputRootFetcher interface {
-	OutputV0AtBlockNumber(ctx context.Context, blockNum uint64) (*eth.OutputV0, error)
-	OutputV0AtBlock(ctx context.Context, blockHash common.Hash) (*eth.OutputV0, error)
-}
-
 type L2EthClient interface {
 	L2EthBlockRef
 	EthExtendedClient
 	SystemConfigFetcher
-	OutputRootFetcher
 }

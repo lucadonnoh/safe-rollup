@@ -141,7 +141,7 @@ func TestChannelStage_NextData_Timeout(t *testing.T) {
 	require := require.New(t)
 	fq := &fakeChannelBankInput{}
 	lgr := testlog.Logger(t, slog.LevelWarn)
-	spec := rollup.NewChainSpec(&rollup.Config{GraniteTime: ptr.New(uint64(0))}) // const channel timeout
+	spec := rollup.NewChainSpec(&rollup.Config{})
 	cs := NewChannelAssembler(lgr, spec, fq, metrics.NoopMetrics)
 
 	fq.AddFrames("a:0:foo")

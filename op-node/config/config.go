@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -47,19 +47,13 @@ type Config struct {
 
 	ConfigPersistence ConfigPersistence
 
-	// Path to store safe head database. Disabled when set to empty string
-
-	// RuntimeConfigReloadInterval defines the interval between runtime config reloads.
-	// Disabled if <= 0.
-	// Runtime config changes should be picked up from log-events,
-	// but if log-events are not coming in (e.g. not syncing blocks) then the reload ensures the config stays accurate.
-	RuntimeConfigReloadInterval time.Duration
+	// P2PSequencerAddress is the address that signs gossiped unsafe blocks.
+	P2PSequencerAddress common.Address
 
 	// Optional
 	Tracer tracer.Tracer
 
 	// Optional
-	L2FollowSource L2FollowSourceEndpointSetup
 
 	Sync sync.Config
 
@@ -68,9 +62,6 @@ type Config struct {
 
 	// AltDA config
 	AltDA altda.CLIConfig
-
-	IgnoreMissingPectraBlobSchedule bool
-	FetchWithdrawalRootFromState    bool
 }
 
 func (cfg *Config) LoadPersisted(log log.Logger) error {
@@ -91,8 +82,6 @@ func (cfg *Config) LoadPersisted(log log.Logger) error {
 	return nil
 }
 
-var ErrMissingPectraBlobSchedule = errors.New("probably missing Pectra blob schedule")
-
 // Check verifies that the given configuration makes sense
 func (cfg *Config) Check() error {
 	if err := cfg.L1.Check(); err != nil {
@@ -107,13 +96,6 @@ func (cfg *Config) Check() error {
 	if err := cfg.Rollup.Check(); err != nil {
 		return fmt.Errorf("rollup config error: %w", err)
 	}
-	if !cfg.IgnoreMissingPectraBlobSchedule && cfg.Rollup.ProbablyMissingPectraBlobSchedule() {
-		log.Error("Your rollup config seems to be missing the Pectra blob schedule fix. " +
-			"Reach out to your chain operator for the correct Pectra blob schedule configuration. " +
-			"If you know what you are doing, you can disable this error by setting the " +
-			"'--ignore-missing-pectra-blob-schedule' flag or 'IGNORE_MISSING_PECTRA_BLOB_SCHEDULE' env var.")
-		return ErrMissingPectraBlobSchedule
-	}
 	if err := cfg.Metrics.Check(); err != nil {
 		return fmt.Errorf("metrics config error: %w", err)
 	}
@@ -127,9 +109,6 @@ func (cfg *Config) Check() error {
 	}
 	if err := cfg.AltDA.Check(); err != nil {
 		return fmt.Errorf("altDA config error: %w", err)
-	}
-	if cfg.AltDA.Enabled {
-		log.Warn("Alt-DA Mode is a Beta feature of the MIT licensed OP Stack.  While it has received initial review from core contributors, it is still undergoing testing, and may have bugs or other issues.")
 	}
 	return nil
 }

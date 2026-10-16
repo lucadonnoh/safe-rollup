@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
@@ -67,8 +68,7 @@ func TestAttributesQueue(t *testing.T) {
 	l2Fetcher := &testutils.MockL2Client{}
 	l2Fetcher.ExpectSystemConfigByL2Hash(safeHead.Hash, parentL1Cfg, nil)
 
-	rollupCfg := rollup.Config{}
-	l1InfoTx, err := L1InfoDepositBytes(&rollupCfg, params.MergedTestChainConfig, expectedL1Cfg, safeHead.SequenceNumber+1, l1Info, 0)
+	l1InfoTx, err := L1InfoDepositBytes(params.MergedTestChainConfig, expectedL1Cfg, safeHead.SequenceNumber+1, l1Info)
 	require.NoError(t, err)
 	attrs := eth.PayloadAttributes{
 		Timestamp:             eth.Uint64Quantity(safeHead.Time + cfg.BlockTime),
@@ -77,6 +77,10 @@ func TestAttributesQueue(t *testing.T) {
 		Transactions:          []eth.Data{l1InfoTx, eth.Data("foobar"), eth.Data("example")},
 		NoTxPool:              true,
 		GasLimit:              (*eth.Uint64Quantity)(&expectedL1Cfg.GasLimit),
+		Withdrawals:           &types.Withdrawals{},
+		ParentBeaconBlockRoot: new(common.Hash),
+		EIP1559Params:         &expectedL1Cfg.EIP1559Params,
+		MinBaseFee:            &expectedL1Cfg.MinBaseFee,
 	}
 	attrBuilder := NewFetchingAttributesBuilder(cfg, params.MergedTestChainConfig, l1Fetcher, l2Fetcher)
 

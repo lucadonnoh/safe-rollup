@@ -13,6 +13,7 @@ from loc import EXTS, SKIP_DIRS, is_test, sloc
 TRUST_MODEL = "trust model: proofs, settlement, L1 system, interop, DA challenges, Ethereum DA"
 UNUSED = "not used by this chain: alternative clients, ops tooling, presets"
 HARNESS = "e2e and contract test harnesses built around the old L1 system"
+FORKS = "hardfork history: forks before the genesis fork, and forks after it"
 RULES = [
     (TRUST_MODEL, [
         "op-proposer/", "op-challenger/", "op-dispute-mon/", "cannon/", "op-preimage/", "op-deployer/",
@@ -53,6 +54,34 @@ RULES = [
         "packages/contracts-bedrock/test/libraries/StaticConfig", "packages/contracts-bedrock/test/integration/",
         "packages/contracts-bedrock/test/L2/L2ToL2CrossDomainMessenger",
         "packages/contracts-bedrock/test/legacy/L1ChugSplashProxy", "packages/contracts-bedrock/test/legacy/ResolvedDelegateProxy",
+        # Ethereum DA: blobs, calldata batches, DA throttling.
+        "op-batcher/batcher/throttler/", "op-batcher/batcher/channel_config_provider", "op-batcher/config/",
+        "op-batcher/flags/throttle_flags", "op-batcher/flags/types", "op-batcher/metrics/metrics_test",
+        "op-service/bgpo/", "op-service/eth/blob", "op-service/sources/l1_beacon_client", "op-service/apis/beacon",
+        "op-service/sources/mocks/BeaconClient", "op-service/testutils/mock_blobs_fetcher",
+        "op-service/txmgr/test_txmgr", "op-batcher/batcher/test_batch_submitter",
+        "op-alt-da/damgr", "op-alt-da/damock", "op-alt-da/cmd/daserver/s3",
+        # Interop and supernode: cross-safe authority, follow source, super roots.
+        "op-node/rollup/iface.go", "op-node/rollup/engine/cross_safe_cache", "op-node/rollup/engine/super_authority",
+        "op-node/rollup/engine/unsafe_ingestion_deny", "op-node/rollup/driver/follow_", "op-node/config/follow_source",
+        "op-service/sources/follow_client", "op-service/sources/supernode_client", "op-service/apis/supernode",
+        "op-service/eth/supernode_status", "op-service/eth/super_root", "op-service/eth/superroot_at_timestamp",
+        "op-node/rollup/conductor/",
+        # Output roots and proofs.
+        "op-service/eth/output", "op-service/eth/account_proof", "op-service/eth/execution_witness",
+        "op-service/eth/transition_state", "op-service/apis/proposer",
+        # L1 system config signer slot, read by the runtime config.
+        "op-node/node/runcfg/", "op-service/testutils/runtime_config",
+    ]),
+    (FORKS, [
+        "op-core/forks/", "op-node/rollup/toggles", "op-node/rollup/chain_spec_test",
+        "op-node/rollup/derive/channel_bank", "op-node/rollup/derive/batch_queue", "op-node/rollup/derive/channel_mux",
+        "op-node/rollup/derive/batch_mux", "op-node/rollup/derive/l1_block_info_tob_test",
+        "op-core/params/chain_config", "op-core/params/geth", "op-node/metrics/metrics_test",
+        "op-core/nuts/", "op-node/rollup/derive/upgrade", "op-node/rollup/derive/ecotone_upgrade",
+        "op-node/rollup/derive/fjord_upgrade", "op-node/rollup/derive/isthmus_upgrade",
+        "op-node/rollup/derive/jovian_upgrade", "op-node/rollup/derive/karst_upgrade",
+        "op-node/rollup/derive/interop_upgrade",
     ]),
     (HARNESS, [
         "op-e2e/", "op-devstack/", "op-acceptance-tests/", "op-up/", "rust/kona/tests/", "rust/op-reth/tests/",

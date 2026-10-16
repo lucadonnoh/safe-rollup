@@ -10,11 +10,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive/mocks"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive/params"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-service/ptr"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
 
@@ -108,25 +106,13 @@ func TestPruneFrameQueue(t *testing.T) {
 }
 
 func TestFrameQueue_NextFrame(t *testing.T) {
-	t.Run("pre-holocene", func(t *testing.T) { testFrameQueue_NextFrame(t, false) })
-	t.Run("holocene", func(t *testing.T) { testFrameQueue_NextFrame(t, true) })
-}
-
-func testFrameQueue_NextFrame(t *testing.T, holocene bool) {
 	lgr := testlog.Logger(t, slog.LevelWarn)
-	cfg := &rollup.Config{}
 	dp := mocks.NewNextDataProvider(t)
-	fq := NewFrameQueue(lgr, cfg, dp)
+	fq := NewFrameQueue(lgr, dp)
 
 	inFrames := testFramesToFrames("b:1:", "b:2:!", "a:0:", "c:1:!", "a:1:", "a:2:!", "c:0:", "c:1:", "d:0:", "c:2:!", "e:0:")
-	var expFrames []Frame
-	if holocene {
-		cfg.HoloceneTime = ptr.New(uint64(0))
-		// expect pruned frames with Holocene
-		expFrames = testFramesToFrames("b:1:", "b:2:!", "a:0:", "a:1:", "a:2:!", "e:0:")
-	} else {
-		expFrames = inFrames
-	}
+	// expect pruned frames
+	expFrames := testFramesToFrames("b:1:", "b:2:!", "a:0:", "a:1:", "a:2:!", "e:0:")
 
 	var inBuf bytes.Buffer
 	inBuf.WriteByte(params.DerivationVersion0)
@@ -134,7 +120,7 @@ func testFrameQueue_NextFrame(t *testing.T, holocene bool) {
 		require.NoError(t, f.MarshalBinary(&inBuf))
 	}
 
-	dp.On("Origin").Return(eth.L1BlockRef{})
+	dp.On("Origin").Return(eth.L1BlockRef{}).Maybe()
 	dp.On("NextData", mock.Anything).Return(inBuf.Bytes(), nil).Once()
 	dp.On("NextData", mock.Anything).Return(nil, io.EOF)
 

@@ -1,11 +1,9 @@
 package derive
 
 import (
-	"encoding/binary"
 	"fmt"
 
 	"github.com/ethereum-optimism/optimism/op-core/eip1559"
-	"github.com/ethereum-optimism/optimism/op-core/forks"
 	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -21,7 +19,7 @@ func payloadL1InfoDeposit(rollupCfg *rollup.Config, payload *eth.ExecutionPayloa
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode L1 info deposit tx from L2 block: %w", err)
 	}
-	info, err := L1BlockInfoFromBytes(rollupCfg, uint64(payload.Timestamp), deposit.Data)
+	info, err := L1BlockInfoFromBytes(deposit.Data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse L1 info deposit tx from L2 block: %w", err)
 	}
@@ -59,29 +57,6 @@ func PayloadToBlockRef(rollupCfg *rollup.Config, payload *eth.ExecutionPayload) 
 	}, nil
 }
 
-// upgradeGasToStrip returns the one-time NUT-bundle upgrade gas to subtract from the system config
-// reconstructed from a block with the given timestamp. Starting with Karst, upgrade gas is added to
-// a fork's activation block to accommodate its NUT bundle; subtracting it again at the next block
-// reverts the gas limit to the steady state. Karst can opt out via KeepKarstUpgradeGas (for chains
-// that activated Karst with the leak baked into their history); later forks have no opt-out.
-func upgradeGasToStrip(cfg *rollup.Config, blockTime uint64) uint64 {
-	for _, fork := range forks.From(forks.Karst) {
-		if !cfg.IsActivationBlockForFork(blockTime, fork) {
-			continue
-		}
-		// At most one fork activates per block, so the first activation fork found is the only one.
-		if fork == forks.Karst && cfg.KeepKarstUpgradeGas {
-			return 0
-		}
-		// A fork without a NUT bundle (UpgradeGas errors) adds no upgrade gas.
-		if gas, err := UpgradeGas(fork); err == nil {
-			return gas
-		}
-		return 0
-	}
-	return 0
-}
-
 func PayloadToSystemConfig(rollupCfg *rollup.Config, payload *eth.ExecutionPayload) (eth.SystemConfig, error) {
 	if uint64(payload.BlockNumber) == rollupCfg.Genesis.L2.Number {
 		if payload.BlockHash != rollupCfg.Genesis.L2.Hash {
@@ -96,50 +71,29 @@ func PayloadToSystemConfig(rollupCfg *rollup.Config, payload *eth.ExecutionPaylo
 	if err != nil {
 		return eth.SystemConfig{}, err
 	}
-	if isEcotoneButNotFirstBlock(rollupCfg, uint64(payload.Timestamp)) {
-		// Translate Ecotone values back into encoded scalar if needed.
-		// We do not know if it was derived from a v0 or v1 scalar,
-		// but v1 is fine, a 0 blob base fee has the same effect.
-		info.L1FeeScalar[0] = 1
-		binary.BigEndian.PutUint32(info.L1FeeScalar[24:28], info.BlobBaseFeeScalar)
-		binary.BigEndian.PutUint32(info.L1FeeScalar[28:32], info.BaseFeeScalar)
-	}
+	// We do not know if the scalar was derived from a v0 or v1 scalar, but v1 is fine, a 0 blob
+	// base fee has the same effect.
 	r := eth.SystemConfig{
 		BatcherAddr: info.BatcherAddr,
-		Overhead:    info.L1FeeOverhead,
-		Scalar:      info.L1FeeScalar,
-		GasLimit:    uint64(payload.GasLimit),
-	}
-
-	// Starting with Karst, each NUT-bundle fork adds one-time upgrade gas to its activation block's
-	// gas limit so the upgrade transactions don't have to fit within the system config gas limit
-	// (see PreparePayloadAttributes). Subtract it back here so the reconstructed config holds the
-	// steady-state limit. This runs before UpdateSystemConfigWithL1Receipts in
-	// PreparePayloadAttributes, so a setGasLimit in the same block's L1 origin takes precedence.
-	if gasToStrip := upgradeGasToStrip(rollupCfg, uint64(payload.Timestamp)); gasToStrip > 0 {
-		if r.GasLimit < gasToStrip {
-			return eth.SystemConfig{}, fmt.Errorf("activation block gas limit %d below upgrade gas %d", r.GasLimit, gasToStrip)
-		}
-		r.GasLimit -= gasToStrip
-	}
-	err = eip1559.ValidateOptimismExtraData(rollupCfg, uint64(payload.Timestamp), payload.ExtraData)
-	if err != nil {
-		return eth.SystemConfig{}, err
-	}
-	d, e, m := eip1559.DecodeOptimismExtraData(rollupCfg, uint64(payload.Timestamp), payload.ExtraData)
-	copy(r.EIP1559Params[:], eip1559.EncodeHolocene1559Params(d, e))
-
-	if rollupCfg.IsIsthmus(uint64(payload.Timestamp)) {
-		r.OperatorFeeParams = eth.EncodeOperatorFeeParams(eth.OperatorFeeParams{
+		Scalar: eth.EncodeScalar(eth.EcotoneScalars{
+			BlobBaseFeeScalar: info.BlobBaseFeeScalar,
+			BaseFeeScalar:     info.BaseFeeScalar,
+		}),
+		GasLimit: uint64(payload.GasLimit),
+		OperatorFeeParams: eth.EncodeOperatorFeeParams(eth.OperatorFeeParams{
 			Scalar:   info.OperatorFeeScalar,
 			Constant: info.OperatorFeeConstant,
-		})
+		}),
+		DAFootprintGasScalar: info.DAFootprintGasScalar,
 	}
 
-	if rollupCfg.IsJovian(uint64(payload.Timestamp)) {
-		// ValidateOptimismExtraData returning a nil error guarantees that m is not nil
-		r.MinBaseFee = *m
-		r.DAFootprintGasScalar = info.DAFootprintGasScalar
+	if err := eip1559.ValidateJovianExtraData(payload.ExtraData); err != nil {
+		return eth.SystemConfig{}, err
 	}
+	d, e, m := eip1559.DecodeJovianExtraData(payload.ExtraData)
+	copy(r.EIP1559Params[:], eip1559.EncodeHolocene1559Params(d, e))
+
+	// ValidateOptimismExtraData returning a nil error guarantees that m is not nil
+	r.MinBaseFee = *m
 	return r, nil
 }

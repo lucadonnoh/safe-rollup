@@ -24,7 +24,13 @@ L1:
 
 No portal, no state roots, no proofs, no dispute games, no proxies, no deploy or upgrade manager.
 The batcher posts only keccak commitments (34 bytes per batch) to an EOA inbox; the batch data
-lives in an offchain DA server.
+lives in an offchain DA server. There is no Ethereum DA mode, no blob support and no DA throttling.
+
+Every fork up to Jovian is active from genesis, so op-node and op-batcher carry no fork schedule:
+one L1 info format, one batch pipeline (the Holocene stages), fixed engine API versions. Interop,
+the supernode authority, follow-source sync and the HA conductor hooks are gone. The unsafe block
+signer for p2p gossip is set offchain with `--p2p.sequencer.address`, since there is no signer
+slot on L1.
 
 Tokens: an L1-native ERC20 is escrowed in the Safe and minted on L2 as an `OptimismMintableERC20`
 created with the L2 factory predeploy. An L2-native ERC20 needs an L1 copy, deployed as
@@ -39,7 +45,8 @@ Offchain:
 - `ts/watcher.ts` (cold keys): checks every queued payout against its own verifier node, which
   derives the chain from L1 and the DA server only, and vetoes anything it cannot match.
 - `ts/lib.ts`: client library for deposits, withdrawals and their status.
-- `cmd/safe-genesis`: L2 genesis and rollup config. Replaces op-deployer.
+- `cmd/safe-genesis`: L2 genesis and rollup config, from the L2 state that
+  `SafeRollupGenesis.s.sol` dumps with `forge script`. Replaces op-deployer and op-chain-ops.
 
 ## Run it
 
@@ -65,12 +72,15 @@ against upstream `develop` at e45aad88:
 | | lines |
 |---|---:|
 | Upstream total | 633,212 |
-| Removed because of the trust model: proofs, settlement, L1 system, interop, DA challenges, Ethereum DA | 244,310 |
-| Removed because this chain does not use it: alternative clients, ops tooling, presets | 171,020 |
-| Removed e2e and contract test harnesses built around the old L1 system | 98,030 |
-| Net lines cut from files that were kept | 2,193 |
-| **Remaining** | **118,472** |
-| Added: contracts, genesis tool, deploy script and tests (plus ~680 lines of TypeScript) | 813 |
+| Removed because of the trust model: proofs, settlement, L1 system, interop, DA challenges, Ethereum DA | 251,849 |
+| Removed because this chain does not use it: alternative clients, ops tooling, presets | 193,944 |
+| Removed e2e and contract test harnesses built around the old L1 system | 101,022 |
+| Removed hardfork history: forks before the genesis fork, and forks after it | 4,025 |
+| Net lines cut from files that were kept, mostly fork switches and Ethereum DA paths | 11,445 |
+| **Remaining** | **72,590** |
+| Added: contracts, genesis tool, deploy and genesis scripts, tests (plus ~680 lines of TypeScript) | 1,663 |
+
+Of the remaining lines, 41k are production code and 32k are tests.
 
 The withdrawal flow in viem's OP stack extension (prove, finalize, games, output roots, timing) is
 about 1,900 lines; `ts/lib.ts` is about 250.
@@ -78,7 +88,7 @@ about 1,900 lines; `ts/lib.ts` is about 250.
 ## Not done
 
 - NFTs are not bridged.
-- Code paths for hardforks older than the genesis fork are still in op-node.
+- The chain is pinned at Jovian: adopting a later fork means adding its code back to op-node.
 - The test harnesses that deployed the full L1 system were deleted, not rewritten; coverage of
   op-node and op-batcher against a live L1 is now only the devnet demo.
 - `test/libraries/EOA.t.sol` has one fuzz failure with forge < 1.8 (7702 delegation to address 0).

@@ -3,131 +3,74 @@ package altda
 import (
 	"context"
 	"math/rand"
+	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
-	"github.com/stretchr/testify/require"
 )
 
-func TestDAClientPrecomputed(t *testing.T) {
-	store := NewMemStore()
-	logger := testlog.Logger(t, log.LevelDebug)
+type memStore struct {
+	mu sync.Mutex
+	db map[string][]byte
+}
 
+func (s *memStore) Get(_ context.Context, key []byte) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if v, ok := s.db[string(key)]; ok {
+		return v, nil
+	}
+	return nil, ErrNotFound
+}
+
+func (s *memStore) Put(_ context.Context, key []byte, value []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.db[string(key)] = value
+	return nil
+}
+
+func TestDAClient(t *testing.T) {
 	ctx := context.Background()
-
-	server := NewDAServer("127.0.0.1", 0, store, logger, false)
-
+	store := &memStore{db: map[string][]byte{}}
+	server := NewDAServer("127.0.0.1", 0, store, testlog.Logger(t, log.LevelDebug))
 	require.NoError(t, server.Start())
 
-	cfg := CLIConfig{
-		Enabled:      true,
-		DAServerURL:  server.HttpEndpoint(),
-		VerifyOnRead: true,
-	}
+	cfg := CLIConfig{DAServerURL: server.HttpEndpoint()}
 	require.NoError(t, cfg.Check())
-
 	client := cfg.NewDAClient()
 
 	rng := rand.New(rand.NewSource(1234))
-
-	input := RandomData(rng, 2000)
+	randomData := func(n int) []byte {
+		b := make([]byte, n)
+		rng.Read(b)
+		return b
+	}
+	input := randomData(2000)
 
 	comm, err := client.SetInput(ctx, input)
 	require.NoError(t, err)
-
-	require.Equal(t, comm, NewKeccak256Commitment(input))
+	require.Equal(t, NewCommitment(input), comm)
 
 	stored, err := client.GetInput(ctx, comm)
 	require.NoError(t, err)
-
 	require.Equal(t, input, stored)
 
-	// set a bad commitment in the store
+	// The client rejects data that does not match the commitment.
 	require.NoError(t, store.Put(ctx, comm.Encode(), []byte("bad data")))
-
 	_, err = client.GetInput(ctx, comm)
 	require.ErrorIs(t, err, ErrCommitmentMismatch)
 
-	// test not found error
-	comm = NewKeccak256Commitment(RandomData(rng, 32))
-	_, err = client.GetInput(ctx, comm)
+	_, err = client.GetInput(ctx, NewCommitment(randomData(32)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	// test storing bad data
 	_, err = client.SetInput(ctx, []byte{})
 	require.ErrorIs(t, err, ErrInvalidInput)
 
-	// server not responsive
 	require.NoError(t, server.Stop())
 	_, err = client.SetInput(ctx, input)
 	require.Error(t, err)
-
-	_, err = client.GetInput(ctx, NewKeccak256Commitment(input))
-	require.Error(t, err)
-}
-
-func TestDAClientService(t *testing.T) {
-	store := NewMemStore()
-	logger := testlog.Logger(t, log.LevelDebug)
-
-	ctx := context.Background()
-
-	server := NewDAServer("127.0.0.1", 0, store, logger, false)
-
-	require.NoError(t, server.Start())
-
-	cfg := CLIConfig{
-		Enabled:      true,
-		DAServerURL:  server.HttpEndpoint(),
-		VerifyOnRead: false,
-		GenericDA:    false,
-	}
-	require.NoError(t, cfg.Check())
-
-	client := cfg.NewDAClient()
-
-	rng := rand.New(rand.NewSource(1234))
-
-	input := RandomData(rng, 2000)
-
-	comm, err := client.SetInput(ctx, input)
-	require.NoError(t, err)
-
-	require.Equal(t, comm.String(), NewKeccak256Commitment(input).String())
-
-	stored, err := client.GetInput(ctx, comm)
-	require.NoError(t, err)
-
-	require.Equal(t, input, stored)
-
-	// set a bad commitment in the store
-	require.NoError(t, store.Put(ctx, comm.Encode(), []byte("bad data")))
-
-	// assert no error as generic commitments cannot be verified client side
-	_, err = client.GetInput(ctx, comm)
-	require.NoError(t, err)
-
-	// test not found error
-	comm = NewKeccak256Commitment(RandomData(rng, 32))
-	_, err = client.GetInput(ctx, comm)
-	require.ErrorIs(t, err, ErrNotFound)
-
-	// test storing bad data
-	_, err = client.SetInput(ctx, []byte{})
-	require.ErrorIs(t, err, ErrInvalidInput)
-
-	// server not responsive
-	require.NoError(t, server.Stop())
-	_, err = client.SetInput(ctx, input)
-	require.Error(t, err)
-
-	_, err = client.GetInput(ctx, NewKeccak256Commitment(input))
-	require.Error(t, err)
-}
-
-func RandomData(rng *rand.Rand, size int) []byte {
-	out := make([]byte, size)
-	rng.Read(out)
-	return out
 }

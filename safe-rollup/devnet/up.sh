@@ -51,9 +51,14 @@ SAFE=$(jq -r .safe "$DATA/addresses.json")
 GATEWAY=$(jq -r .gateway "$DATA/addresses.json")
 
 echo "generating L2 genesis and rollup config"
-"$BIN/safe-genesis" --l1-rpc $L1_RPC --artifacts "$CONTRACTS/forge-artifacts" \
-  --gateway "$GATEWAY" --safe "$SAFE" --batcher "$BATCHER_ADDR" --sequencer "$SEQUENCER_ADDR" \
-  --fee-recipient "$SAFE" --l2-chain-id 901 --out "$DATA"
+(
+  cd "$CONTRACTS"
+  L2_CHAIN_ID=901 GATEWAY="$GATEWAY" SAFE="$SAFE" OUT=.testdata/allocs.json \
+    forge script scripts/safe-rollup/SafeRollupGenesis.s.sol >"$DATA/logs/genesis.log" 2>&1
+  mv .testdata/allocs.json "$DATA/allocs.json"
+)
+"$BIN/safe-genesis" --l1-rpc $L1_RPC --allocs "$DATA/allocs.json" --gateway "$GATEWAY" \
+  --batcher "$BATCHER_ADDR" --l2-chain-id 901 --out "$DATA"
 cp "$SR/devnet/l1-chain-config.json" "$DATA/"
 openssl rand -hex 32 >"$DATA/jwt.txt"
 
@@ -72,7 +77,7 @@ l2_node() {
     --nodiscover --maxpeers 0 --syncmode full --rollup.disabletxpoolgossip
   wait_rpc "http://127.0.0.1:$http"
   start "$name-node" "$BIN/op-node" --l1 $L1_RPC --l1.rpckind standard --l1.trustrpc \
-    --l1.http-poll-interval 1s --altda.enabled --altda.da-server $DA_SERVER \
+    --l1.http-poll-interval 1s --altda.da-server $DA_SERVER \
     --l2 "http://127.0.0.1:$auth" --l2.jwt-secret "$DATA/jwt.txt" \
     --rollup.config "$DATA/rollup.json" --rollup.l1-chain-config "$DATA/l1-chain-config.json" \
     --verifier.l1-confs 0 --p2p.disable --rpc.addr 127.0.0.1 --rpc.port "$rollup" "$@"
@@ -86,7 +91,7 @@ l2_node verifier 9645 9651 7645
 echo "starting op-batcher"
 sleep 3
 start op-batcher "$BIN/op-batcher" --l1-eth-rpc $L1_RPC --l2-eth-rpc $L2_RPC --rollup-rpc $ROLLUP_RPC \
-  --private-key "$BATCHER_KEY" --altda.enabled --altda.da-server $DA_SERVER --max-channel-duration 1 \
+  --private-key "$BATCHER_KEY" --altda.da-server $DA_SERVER --max-channel-duration 1 \
   --poll-interval 1s --num-confirmations 1 --sub-safety-margin 4 --resubmission-timeout 30s \
   --rpc.port 6545
 

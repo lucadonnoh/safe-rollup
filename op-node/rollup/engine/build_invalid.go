@@ -43,7 +43,7 @@ func (e *EngineController) onBuildInvalid(ctx context.Context, ev BuildInvalidEv
 		return
 	}
 
-	if ev.Attributes.IsDerived() && e.rollupCfg.IsHolocene(ev.Attributes.DerivedFrom.Time) {
+	if ev.Attributes.IsDerived() {
 		e.emitDepositsOnlyPayloadAttributesRequest(ctx, ev.Attributes.Parent.ID(), ev.Attributes.DerivedFrom)
 		return
 	}

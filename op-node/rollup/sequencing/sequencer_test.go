@@ -16,7 +16,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-node/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/conductor"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/engine"
 	"github.com/ethereum-optimism/optimism/op-service/clock"
@@ -62,10 +61,8 @@ func (m *FakeAttributesBuilder) PreparePayloadAttributes(ctx context.Context,
 		GasLimit:              &gasLimit,
 	}
 
-	if m.cfg.IsEcotone(uint64(attrs.Timestamp)) {
-		r := testutils.RandomHash(m.rng)
-		attrs.ParentBeaconBlockRoot = &r
-	}
+	r := testutils.RandomHash(m.rng)
+	attrs.ParentBeaconBlockRoot = &r
 	return attrs, nil
 }
 
@@ -102,37 +99,6 @@ func (b *BasicSequencerStateListener) SequencerStopped() error {
 }
 
 var _ SequencerStateListener = (*BasicSequencerStateListener)(nil)
-
-// FakeConductor is a no-op conductor that assumes this node is the leader sequencer.
-type FakeConductor struct {
-	closed    bool
-	leader    bool
-	committed *eth.ExecutionPayloadEnvelope
-}
-
-var _ conductor.SequencerConductor = &FakeConductor{}
-
-func (c *FakeConductor) Enabled(ctx context.Context) bool {
-	return true
-}
-
-func (c *FakeConductor) Leader(ctx context.Context) (bool, error) {
-	return c.leader, nil
-}
-
-func (c *FakeConductor) CommitUnsafePayload(ctx context.Context, payload *eth.ExecutionPayloadEnvelope) error {
-	c.committed = payload
-	return nil
-}
-
-func (c *FakeConductor) OverrideLeader(ctx context.Context) error {
-	c.leader = true
-	return nil
-}
-
-func (c *FakeConductor) Close() {
-	c.closed = true
-}
 
 type FakeAsyncGossip struct {
 	payload *eth.ExecutionPayloadEnvelope
@@ -213,12 +179,10 @@ func TestSequencer_StartStop(t *testing.T) {
 	// Allow the sequencer to be the leader.
 	// This is checked, since we start sequencing later, after initialization.
 	// Also see issue #11121 for context: the conductor is checked by the infra, when initialized in active state.
-	deps.conductor.leader = true
 
 	testCtx := context.Background()
 	require.NoError(t, seq.Init(testCtx, false))
 	emitter.AssertExpectations(t)
-	require.False(t, deps.conductor.closed, "conductor is ready")
 	require.True(t, deps.asyncGossip.started, "async gossip is always started on initialization")
 	require.False(t, deps.seqState.active, "sequencer not active yet")
 
@@ -282,7 +246,6 @@ func TestSequencer_NoActionAfterStop(t *testing.T) {
 	seq, deps := createSequencer(logger)
 	emitter := &testutils.MockEmitter{}
 	seq.AttachEmitter(emitter)
-	deps.conductor.leader = true
 
 	testCtx := context.Background()
 	require.NoError(t, seq.Init(testCtx, false))
@@ -343,12 +306,10 @@ func TestSequencer_StaleBuild(t *testing.T) {
 
 	emitter := &testutils.MockEmitter{}
 	seq.AttachEmitter(emitter)
-	deps.conductor.leader = true
 
 	testCtx := context.Background()
 	require.NoError(t, seq.Init(testCtx, false))
 	emitter.AssertExpectations(t)
-	require.False(t, deps.conductor.closed, "conductor is ready")
 	require.True(t, deps.asyncGossip.started, "async gossip is always started on initialization")
 	require.False(t, deps.seqState.active, "sequencer not active yet")
 
@@ -432,7 +393,7 @@ func TestSequencer_StaleBuild(t *testing.T) {
 		}, nil
 	}
 	// The block seals fine, but local processing fails with a temporary
-	// (non-sentinel) error: the block is committed to the conductor, but it is not
+	// (non-sentinel) error: the block is sealed, but it is not
 	// canonical and so must not reach peers.
 	processPayloadCalled := false
 	deps.eng.processPayloadFn = func(ctx context.Context, envelope *eth.ExecutionPayloadEnvelope, ref eth.L2BlockRef, buildStarted time.Time) error {
@@ -440,10 +401,9 @@ func TestSequencer_StaleBuild(t *testing.T) {
 		return fmt.Errorf("mock temporary engine error")
 	}
 
-	// Seal action: SealBuild succeeds, commits to conductor, ProcessPayload fails.
+	// Seal action: SealBuild succeeds, ProcessPayload fails.
 	seq.RunAction()
 	require.True(t, processPayloadCalled, "ProcessPayload must have been called")
-	require.Equal(t, payloadEnvelope, deps.conductor.committed, "must commit to conductor")
 	require.Nil(t, deps.asyncGossip.payload, "an uninserted block must not reach peers")
 	require.Equal(t, payloadEnvelope, seq.building.Envelope, "envelope retained for the insert retry")
 	_, ok = seq.NextAction()
@@ -635,10 +595,9 @@ func TestSequencerBuild(t *testing.T) {
 		return nil
 	}
 
-	// Seal action: seals, commits to conductor, inserts, and only then publishes
+	// Seal action: seals, inserts, and only then publishes
 	// the payload, all synchronously via direct calls.
 	seq.RunAction()
-	require.Equal(t, payloadEnvelope, deps.conductor.committed, "must commit to conductor")
 	require.Equal(t, payloadEnvelope, deps.asyncGossip.payload, "published after a successful insert")
 	require.Equal(t, BuildingState{}, seq.building, "building state cleared after successful insert")
 	require.Equal(t, payloadRef, seq.lastSealed, "sealed block recorded")
@@ -730,7 +689,6 @@ func newSeqSetup(t *testing.T) *seqTestSetup {
 	testClock.SetTime(30000)
 	seq.timeNow = testClock.Now
 	seq.AttachEmitter(&testutils.MockEmitter{})
-	deps.conductor.leader = true
 	require.NoError(t, seq.Init(context.Background(), true))
 
 	head := eth.L2BlockRef{
@@ -868,7 +826,6 @@ func TestSequencerSealError(t *testing.T) {
 	s.seq.RunAction()
 
 	require.Equal(t, BuildingState{}, s.seq.building, "seal failure restarts the build")
-	require.Nil(t, s.deps.conductor.committed, "nothing committed to conductor")
 	require.Nil(t, s.deps.asyncGossip.payload, "nothing gossiped")
 	next, ok := s.seq.NextAction()
 	require.True(t, ok)
@@ -890,7 +847,6 @@ func TestSequencerSealStale(t *testing.T) {
 	s.seq.RunAction()
 	require.Equal(t, BuildingState{}, s.seq.building, "stale job dropped")
 	require.Equal(t, eth.L2BlockRef{}, s.seq.lastSealed, "nothing sealed")
-	require.Nil(t, s.deps.conductor.committed, "nothing committed to conductor")
 	require.Nil(t, s.deps.asyncGossip.payload, "nothing gossiped")
 	_, ok := s.seq.NextAction()
 	require.False(t, ok, "parked until the next head update")
@@ -906,7 +862,7 @@ func TestSequencerSealStale(t *testing.T) {
 }
 
 // TestSequencerProcessPayloadErrors covers the ProcessPayload error paths of the
-// seal action: sentinel errors (invalid/denied) drop the payload, while a
+// seal action: the invalid-payload sentinel drops the payload, while a
 // temporary error keeps it in async-gossip so a later action can retry it.
 func TestSequencerProcessPayloadErrors(t *testing.T) {
 	for _, tc := range []struct {
@@ -917,7 +873,6 @@ func TestSequencerProcessPayloadErrors(t *testing.T) {
 		dropped bool
 	}{
 		{name: "payload invalid", err: engine.ErrPayloadInvalid, dropped: true},
-		{name: "payload denied", err: engine.ErrPayloadDenied, dropped: true},
 		{name: "temporary error", err: errors.New("mock temp engine error"), dropped: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -931,7 +886,6 @@ func TestSequencerProcessPayloadErrors(t *testing.T) {
 				return tc.err
 			}
 			s.seq.RunAction()
-			require.Equal(t, envelope, s.deps.conductor.committed, "sealed block is committed before processing")
 
 			require.Nil(t, s.deps.asyncGossip.payload, "nothing is published until the insert succeeds")
 
@@ -1106,7 +1060,7 @@ func TestSequencerStopAfterStaleProcess(t *testing.T) {
 }
 
 // TestSequencerDropsRetainedBlockOnCompetingHead covers a block that was sealed
-// and committed to the conductor, but whose insert failed temporarily, when a
+// but whose insert failed temporarily, when a
 // competing block becomes the head before the retry. The retained block lives in
 // the building state, so the forkchoice update drops it — and because nothing is
 // published before a block is inserted, there is no sibling on the network to
@@ -1119,7 +1073,7 @@ func TestSequencerDropsRetainedBlockOnCompetingHead(t *testing.T) {
 	s := newSeqSetup(t)
 	envelope, ref := s.sealedPayload()
 
-	// A previous action sealed this payload and committed it to the conductor,
+	// A previous action sealed this payload,
 	// then failed to insert it with a temporary error, so it is retained.
 	s.seq.building = BuildingState{Ref: ref, Envelope: envelope}
 	s.seq.lastSealed = ref
@@ -1242,7 +1196,6 @@ type sequencerTestDeps struct {
 	attribBuilder    *FakeAttributesBuilder
 	l1OriginSelector *FakeL1OriginSelector
 	seqState         *BasicSequencerStateListener
-	conductor        *FakeConductor
 	asyncGossip      *FakeAsyncGossip
 	eng              *fakeEngController
 }
@@ -1262,17 +1215,7 @@ func createSequencer(log log.Logger) (*Sequencer, *sequencerTestDeps) {
 			L2Time:       10000000,
 			SystemConfig: eth.SystemConfig{},
 		},
-		BlockTime:         2,
-		MaxSequencerDrift: 15 * 60,
-		RegolithTime:      new(uint64),
-		CanyonTime:        new(uint64),
-		DeltaTime:         new(uint64),
-		EcotoneTime:       new(uint64),
-		FjordTime:         new(uint64),
-		GraniteTime:       new(uint64),
-		HoloceneTime:      new(uint64),
-		IsthmusTime:       new(uint64),
-		JovianTime:        new(uint64),
+		BlockTime: 2,
 	}
 	eng := &fakeEngController{}
 	deps := &sequencerTestDeps{
@@ -1284,12 +1227,11 @@ func createSequencer(log log.Logger) (*Sequencer, *sequencerTestDeps) {
 			},
 		},
 		seqState:    &BasicSequencerStateListener{},
-		conductor:   &FakeConductor{},
 		asyncGossip: &FakeAsyncGossip{},
 		eng:         eng,
 	}
 	seq := NewSequencer(context.Background(), log, cfg, defaultSealingDuration, deps.attribBuilder,
-		deps.l1OriginSelector, deps.seqState, deps.conductor,
+		deps.l1OriginSelector, deps.seqState,
 		deps.asyncGossip, metrics.NoopMetrics, eng)
 	return seq, deps
 }

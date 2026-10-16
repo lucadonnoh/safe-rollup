@@ -18,12 +18,6 @@ interface IGasPriceOracle {
     function isIsthmus() external view returns (bool);
     function isJovian() external view returns (bool);
     function l1BaseFee() external view returns (uint256);
-    function overhead() external view returns (uint256);
-    function scalar() external view returns (uint256);
-    function setEcotone() external;
-    function setFjord() external;
-    function setIsthmus() external;
-    function setJovian() external;
     function version() external view returns (string memory);
 
     function __constructor__() external;

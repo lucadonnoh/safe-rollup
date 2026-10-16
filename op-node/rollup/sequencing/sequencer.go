@@ -13,7 +13,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/conductor"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/engine"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -63,11 +62,10 @@ type BuildingState struct {
 	// Set once known
 	Ref eth.L2BlockRef
 
-	// Envelope is the sealed block, held from the moment it is committed to the
-	// conductor until it is inserted. A temporary insert failure is retried with
-	// exactly this block: re-sealing instead would stake recovery on the engine
-	// still holding the build job, and losing it would abandon a block the
-	// conductor has already committed and build a different one at that height.
+	// Envelope is the sealed block, held from the moment it is sealed until it is
+	// inserted. A temporary insert failure is retried with exactly this block:
+	// re-sealing instead would stake recovery on the engine still holding the
+	// build job.
 	Envelope *eth.ExecutionPayloadEnvelope
 }
 
@@ -99,8 +97,6 @@ type Sequencer struct {
 	// listener for sequencer-state changes. Blocking, may error.
 	// May be used to ensure sequencer-state is accurately persisted.
 	listener SequencerStateListener
-
-	conductor conductor.SequencerConductor
 
 	asyncGossip AsyncGossiper
 
@@ -152,7 +148,6 @@ func NewSequencer(driverCtx context.Context, log log.Logger, rollupCfg *rollup.C
 	attributesBuilder derive.AttributesBuilder,
 	l1OriginSelector L1OriginSelectorIface,
 	listener SequencerStateListener,
-	conductor conductor.SequencerConductor,
 	asyncGossip AsyncGossiper,
 	metrics Metrics,
 	eng SequencerEngine,
@@ -167,7 +162,6 @@ func NewSequencer(driverCtx context.Context, log log.Logger, rollupCfg *rollup.C
 		spec:             rollup.NewChainSpec(rollupCfg),
 		sealingDuration:  sealingDuration,
 		listener:         listener,
-		conductor:        conductor,
 		asyncGossip:      asyncGossip,
 		attrBuilder:      attributesBuilder,
 		l1OriginSelector: l1OriginSelector,
@@ -398,8 +392,7 @@ func (s *Sequencer) RunAction() {
 		return
 	}
 	if s.building.Envelope != nil {
-		// The block was sealed and committed to the conductor; only the local
-		// insert failed, and temporarily. Retry that insert rather than the seal.
+		// The block was sealed; only the local insert failed, and temporarily. Retry that insert rather than the seal.
 		// Park the schedule first: on a temporary error the engine's
 		// EngineTemporaryErrorEvent echoes back through the mailbox and re-arms the
 		// backoff; re-firing before that echo would spin on the engine.
@@ -433,16 +426,6 @@ func (s *Sequencer) RunAction() {
 			"txs", len(envelope.ExecutionPayload.Transactions),
 			"time", uint64(envelope.ExecutionPayload.Timestamp))
 
-		// generous timeout, the conductor is important
-		commitCtx, cancel := context.WithTimeout(s.ctx, time.Second*30)
-		defer cancel()
-		if err := s.conductor.CommitUnsafePayload(commitCtx, envelope); err != nil {
-			s.emitter.Emit(s.ctx, rollup.EngineTemporaryErrorEvent{
-				Err: fmt.Errorf("failed to commit unsafe payload to conductor: %w", err),
-			})
-			return
-		}
-
 		s.building.Ref = sealResult.Ref
 		s.building.Envelope = envelope
 		s.lastSealed = sealResult.Ref
@@ -453,7 +436,7 @@ func (s *Sequencer) RunAction() {
 	}
 }
 
-// insertAndPublish makes a sealed, conductor-committed block our own canonical
+// insertAndPublish makes a sealed block our own canonical
 // head, and only then hands it to peers.
 //
 // The order matters: the gossiper queues and returns, so publishing here does
@@ -485,7 +468,7 @@ func (s *Sequencer) insertAndPublish(envelope *eth.ExecutionPayloadEnvelope, ref
 			if ref.ParentHash != s.unsafeHead.Hash {
 				s.scheduleNextAction(s.unsafeHead)
 			}
-		case errors.Is(err, engine.ErrPayloadDenied), errors.Is(err, engine.ErrPayloadInvalid):
+		case errors.Is(err, engine.ErrPayloadInvalid):
 			s.handleInvalid()
 		}
 		// Otherwise the failure is temporary: building.Envelope still holds the
@@ -741,47 +724,6 @@ func (s *Sequencer) startBuildingBlock() {
 	// from the transaction pool.
 	attrs.NoTxPool = uint64(attrs.Timestamp) > l1Origin.Time+s.spec.MaxSequencerDrift(l1Origin.Time)
 
-	// For the Ecotone activation block we shouldn't include any sequencer transactions.
-	if s.rollupCfg.IsEcotoneActivationBlock(uint64(attrs.Timestamp)) {
-		attrs.NoTxPool = true
-		s.log.Info("Sequencing Ecotone upgrade block")
-	}
-
-	// For the Fjord activation block we shouldn't include any sequencer transactions.
-	if s.rollupCfg.IsFjordActivationBlock(uint64(attrs.Timestamp)) {
-		attrs.NoTxPool = true
-		s.log.Info("Sequencing Fjord upgrade block")
-	}
-
-	// For the Granite activation block we can include sequencer transactions.
-	if s.rollupCfg.IsGraniteActivationBlock(uint64(attrs.Timestamp)) {
-		s.log.Info("Sequencing Granite upgrade block")
-	}
-
-	// For the Isthmus activation block we shouldn't include any sequencer transactions.
-	if s.rollupCfg.IsIsthmusActivationBlock(uint64(attrs.Timestamp)) {
-		attrs.NoTxPool = true
-		s.log.Info("Sequencing Isthmus upgrade block")
-	}
-
-	// For the Jovian activation block we must not include any sequencer transactions.
-	if s.rollupCfg.IsJovianActivationBlock(uint64(attrs.Timestamp)) {
-		attrs.NoTxPool = true
-		s.log.Info("Sequencing Jovian upgrade block")
-	}
-
-	// For the Karst activation block we must not include any sequencer transactions.
-	if s.rollupCfg.IsKarstActivationBlock(uint64(attrs.Timestamp)) {
-		attrs.NoTxPool = true
-		s.log.Info("Sequencing Karst upgrade block")
-	}
-
-	// For the Lagoon activation block we must not include any sequencer transactions.
-	if s.rollupCfg.IsInteropActivationBlock(uint64(attrs.Timestamp)) {
-		attrs.NoTxPool = true
-		s.log.Info("Sequencing Lagoon upgrade block")
-	}
-
 	if recoverMode {
 		attrs.NoTxPool = true
 		s.log.Warn("Sequencing temporarily without user transactions, in recover mode")
@@ -875,15 +817,6 @@ func (s *Sequencer) Active() bool {
 }
 
 func (s *Sequencer) Start(ctx context.Context, head common.Hash) error {
-	// must be leading to activate
-	if isLeader, err := s.conductor.Leader(ctx); err != nil {
-		return fmt.Errorf("sequencer leader check failed: %w", err)
-	} else if !isLeader {
-		return errors.New("sequencer is not the leader, aborting")
-	}
-
-	// Note: leader check happens before locking; this is how the Driver used to work,
-	// and prevents the event-processing of the sequencer from being stalled due to a potentially slow conductor call.
 	if err := s.mu.LockCtx(ctx); err != nil {
 		return err
 	}
@@ -925,7 +858,6 @@ func (s *Sequencer) Init(ctx context.Context, active bool) error {
 func (s *Sequencer) forceStart() error {
 	if s.unsafeHead == (eth.L2BlockRef{}) {
 		// This happens if sequencing is activated on op-node startup.
-		// The op-conductor check and choice of sequencing with this pre-state already happened before op-node startup.
 		s.log.Info("Starting sequencing, without known pre-state")
 	} else {
 		// This happens when we start sequencing on an already-running node.
@@ -967,15 +899,6 @@ func (s *Sequencer) Stop(ctx context.Context) (common.Hash, error) {
 	// Wait for the head to catch up to a block we sealed and gossiped. A zero
 	// marker means there is no such block, so there is nothing to wait for.
 	for s.lastSealed != (eth.L2BlockRef{}) && s.unsafeHead.Hash != s.lastSealed.Hash {
-
-		// if we are not the leader, lastSealed will never be updated and we will wait forever
-		if isLeader, err := s.conductor.Leader(ctx); err != nil {
-			s.log.Warn("Could not determine leadership while stopping. Skipping wait.", "err", err)
-			break
-		} else if !isLeader {
-			s.log.Info("Not leader anymore, skipping head sync wait")
-			break
-		}
 
 		headKnownCh := make(chan struct{})
 		s.headKnownCh = headKnownCh
@@ -1027,20 +950,11 @@ func (s *Sequencer) SetMaxSafeLag(ctx context.Context, v uint64) error {
 	return nil
 }
 
-func (s *Sequencer) OverrideLeader(ctx context.Context) error {
-	return s.conductor.OverrideLeader(ctx)
-}
-
-func (s *Sequencer) ConductorEnabled(ctx context.Context) bool {
-	return s.conductor.Enabled(ctx)
-}
-
 func (s *Sequencer) SetRecoverMode(mode bool) {
 	s.l1OriginSelector.SetRecoverMode(mode)
 	s.recoverMode.Store(mode)
 }
 
 func (s *Sequencer) Close() {
-	s.conductor.Close()
 	s.asyncGossip.Stop()
 }

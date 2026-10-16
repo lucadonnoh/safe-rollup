@@ -16,8 +16,6 @@ import (
 
 type l2EthClient interface {
 	InfoByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, error)
-	// GetProof returns a proof of the account, it may return a nil result without error if the address was not found.
-	// Optionally keys of the account storage trie can be specified to include with corresponding values in the proof.
 }
 
 type driverClient interface {

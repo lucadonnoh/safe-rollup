@@ -15,16 +15,13 @@ import (
 	gethevent "github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/rpc"
 
-	altda "github.com/ethereum-optimism/optimism/op-alt-da"
 	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-node/config"
 	"github.com/ethereum-optimism/optimism/op-node/metrics"
-	"github.com/ethereum-optimism/optimism/op-node/node/runcfg"
 	"github.com/ethereum-optimism/optimism/op-node/node/tracer"
 	"github.com/ethereum-optimism/optimism/op-node/p2p"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/async"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/conductor"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sequencing"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
@@ -34,7 +31,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/httputil"
 	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
-	"github.com/ethereum-optimism/optimism/op-service/retry"
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
 	opsigner "github.com/ethereum-optimism/optimism/op-service/signer"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
@@ -56,9 +52,6 @@ type L1Client interface {
 	InfoAndTxsByNumber(ctx context.Context, number uint64) (eth.BlockInfo, types.Transactions, error)
 	InfoAndTxsByLabel(ctx context.Context, label eth.BlockLabel) (eth.BlockInfo, types.Transactions, error)
 	FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, optypes.Receipts, error)
-	GetProof(ctx context.Context, address common.Address, storage []common.Hash, blockTag string) (*eth.AccountResult, error)
-	GetStorageAt(ctx context.Context, address common.Address, storageSlot common.Hash, blockTag string) (common.Hash, error)
-	ReadStorageAt(ctx context.Context, address common.Address, storageSlot common.Hash, blockHash common.Hash) (common.Hash, error)
 	SubscribeNewHead(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error)
 	ChainID(ctx context.Context) (*big.Int, error)
 	Close()
@@ -70,7 +63,6 @@ type L1Source interface {
 	L1BlockRefByNumber(ctx context.Context, num uint64) (eth.L1BlockRef, error)
 	L1BlockRefByHash(ctx context.Context, hash common.Hash) (eth.L1BlockRef, error)
 	SubscribeNewHead(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error)
-	ReadStorageAt(ctx context.Context, address common.Address, storageSlot common.Hash, blockHash common.Hash) (common.Hash, error)
 	InfoByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, error)
 	InfoAndTxsByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, types.Transactions, error)
 	FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, optypes.Receipts, error)
@@ -84,8 +76,6 @@ type OpNode struct {
 	clock      clock.Clock
 	appVersion string
 	metrics    *metrics.Metrics
-
-	superAuthority rollup.SuperAuthority // Supernode authority for payload validation (may be nil)
 
 	l1HeadsSub              ethereum.Subscription // Subscription to get L1 heads (automatically re-subscribes on error)
 	l1SafeSub               ethereum.Subscription // Subscription to get L1 safe blocks, a.k.a. justified data (polling)
@@ -102,9 +92,6 @@ type OpNode struct {
 	p2pNode   *p2p.NodeP2P          // P2P node functionality
 	p2pMu     gosync.Mutex          // protects p2pNode
 	p2pSigner p2p.Signer            // p2p gossip application messages will be signed with this signer
-	runCfg    *runcfg.RuntimeConfig // runtime configurables
-
-	l2FollowSource *sources.FollowClient // (Optional) L2 Follow source when derivation disabled
 
 	pprofService *oppprof.Service
 	metricsSrv   *httputil.HTTPServer
@@ -113,9 +100,6 @@ type OpNode struct {
 	// and depend on this ctx to be closed.
 	resourcesCtx   context.Context
 	resourcesClose context.CancelFunc
-
-	// Indicates when it's safe to close data sources used by the runtimeConfig bg loader
-	runtimeConfigReloaderDone chan struct{}
 
 	closed atomic.Bool
 
@@ -169,7 +153,6 @@ type InitializationOverrides struct {
 	L1Source        L1Source
 	RPCHandler      *oprpc.Handler
 	MetricsRegistry func(*prometheus.Registry)
-	SuperAuthority  rollup.SuperAuthority // Supernode authority for payload validation
 }
 
 // init progressively creates and sets up all the components of the OpNode
@@ -180,23 +163,10 @@ func (n *OpNode) init(ctx context.Context, cfg *config.Config, overrides Initial
 
 	var err error
 
-	safe := "enabled"
-	if cfg.Sync.FollowSourceEnabled() {
-		safe = cfg.Sync.L2FollowSourceEndpoint
-		n.l2FollowSource, err = initFollowSource(ctx, cfg, n)
-		if err != nil {
-			return fmt.Errorf("failed to init l2 follow source: %w", err)
-		}
-	}
-	n.log.Info("Safety levels", "unsafe", "enabled", "safe", safe)
-
 	n.eventSys, n.eventDrain, err = initEventSystem(n)
 	if err != nil {
 		return fmt.Errorf("failed to init event system: %w", err)
 	}
-
-	// Store the supernode authority for payload validation
-	n.superAuthority = overrides.SuperAuthority
 
 	if overrides.L1Source == nil {
 		l1Source, err := initL1Source(ctx, cfg, n)
@@ -216,11 +186,6 @@ func (n *OpNode) init(ctx context.Context, cfg *config.Config, overrides Initial
 	n.l1HeadsSub, n.l1SafeSub, n.l1FinalizedSub, err = initL1Handlers(cfg, n)
 	if err != nil {
 		return fmt.Errorf("failed to init L1 Source: %w", err)
-	}
-
-	// initRuntimeConfig relies on side effects to set the runCfg
-	if err := initRuntimeConfig(ctx, cfg, n); err != nil {
-		return fmt.Errorf("failed to init the runtime config: %w", err)
 	}
 
 	n.p2pSigner, err = initP2PSigner(ctx, cfg, n)
@@ -264,7 +229,6 @@ func (n *OpNode) init(ctx context.Context, cfg *config.Config, overrides Initial
 	}
 
 	n.metrics.RecordInfo(n.appVersion)
-	n.metrics.RecordHardforkActivationTimes(&cfg.Rollup)
 	n.metrics.RecordUp()
 
 	n.pprofService, err = initPProf(cfg, n)
@@ -361,94 +325,11 @@ func initL1Handlers(cfg *config.Config, node *OpNode) (ethereum.Subscription, et
 	return l1HeadsSub, l1SafeSub, l1FinalizedSub, nil
 }
 
-// initRuntimeConfig initializes the runtime config and starts a background loop to reload it at the configured interval.
-// note: this function relies on side effects to set node.runCfg
-func initRuntimeConfig(ctx context.Context, cfg *config.Config, node *OpNode) error {
-	// attempt to load runtime config, repeat N times
-	runCfg := runcfg.NewRuntimeConfig(node.log, node.l1Source, &cfg.Rollup)
-	node.runCfg = runCfg
-
-	confDepth := cfg.Driver.VerifierConfDepth
-	reload := func(ctx context.Context) (eth.L1BlockRef, error) {
-		fetchCtx, fetchCancel := context.WithTimeout(ctx, time.Second*10)
-		l1Head, err := node.l1Source.L1BlockRefByLabel(fetchCtx, eth.Unsafe)
-		fetchCancel()
-		if err != nil {
-			node.log.Error("failed to fetch L1 head for runtime config initialization", "err", err)
-			return eth.L1BlockRef{}, err
-		}
-
-		// Apply confirmation-distance
-		blNum := l1Head.Number
-		if blNum >= confDepth {
-			blNum -= confDepth
-		}
-		fetchCtx, fetchCancel = context.WithTimeout(ctx, time.Second*10)
-		confirmed, err := node.l1Source.L1BlockRefByNumber(fetchCtx, blNum)
-		fetchCancel()
-		if err != nil {
-			node.log.Error("failed to fetch confirmed L1 block for runtime config loading", "err", err, "number", blNum)
-			return eth.L1BlockRef{}, err
-		}
-
-		fetchCtx, fetchCancel = context.WithTimeout(ctx, time.Second*10)
-		err = runCfg.Load(fetchCtx, confirmed)
-		fetchCancel()
-		if err != nil {
-			node.log.Error("failed to fetch runtime config data", "err", err)
-			return l1Head, err
-		}
-
-		return l1Head, nil
-	}
-
-	// initialize the runtime config before unblocking
-	if err := retry.Do0(ctx, 5, retry.Fixed(time.Second*10), func() error {
-		_, err := reload(ctx)
-		return err
-	}); err != nil {
-		return fmt.Errorf("failed to load runtime configuration repeatedly, last error: %w", err)
-	}
-
-	// start a background loop, to keep reloading it at the configured reload interval
-	reloader := func(ctx context.Context, reloadInterval time.Duration) {
-		if reloadInterval <= 0 {
-			node.log.Debug("not running runtime-config reloading background loop")
-			return
-		}
-		ticker := time.NewTicker(reloadInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				// If the reload fails, we will try again the next interval.
-				// Missing a runtime-config update is not critical, and we do not want to overwhelm the L1 RPC.
-				l1Head, err := reload(ctx)
-				if err != nil {
-					node.log.Warn("failed to reload runtime config", "err", err)
-				} else {
-					node.log.Debug("reloaded runtime config", "l1_head", l1Head)
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}
-
-	// Manages the lifetime of reloader. In order to safely Close the OpNode
-	go func(ctx context.Context, reloadInterval time.Duration) {
-		reloader(ctx, reloadInterval)
-	}(node.resourcesCtx, cfg.RuntimeConfigReloadInterval) // this keeps running after initialization
-	return nil
-}
-
 func initL2(ctx context.Context, cfg *config.Config, node *OpNode) (*sources.EngineClient, *driver.Driver, error) {
 	rpcClient, rpcCfg, err := cfg.L2.Setup(ctx, node.log, &cfg.Rollup, node.metrics)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to setup L2 execution-engine RPC client: %w", err)
 	}
-
-	rpcCfg.FetchWithdrawalRootFromState = cfg.FetchWithdrawalRootFromState
 
 	l2Source, err := sources.NewEngineClient(rpcClient, node.log, node.metrics.L2SourceCache, rpcCfg)
 	if err != nil {
@@ -459,40 +340,16 @@ func initL2(ctx context.Context, cfg *config.Config, node *OpNode) (*sources.Eng
 		return nil, nil, err
 	}
 
-	var sequencerConductor conductor.SequencerConductor = &conductor.NoOpConductor{}
-
-	// if altDA is not explicitly activated in the node CLI, the config + any error will be ignored.
-	rpCfg, err := cfg.Rollup.GetOPAltDAConfig()
-	if cfg.AltDA.Enabled && err != nil {
-		return nil, nil, fmt.Errorf("failed to get altDA config: %w", err)
-	}
-	altDA := altda.NewAltDA(node.log, cfg.AltDA, rpCfg)
+	altDA := cfg.AltDA.NewDAClient()
 
 	if cfg.Rollup.ChainOpConfig == nil {
 		return nil, nil, fmt.Errorf("cfg.Rollup.ChainOpConfig is nil. Please see https://github.com/ethereum-optimism/optimism/releases/tag/op-node/v1.11.0: %w", err)
 	}
 
-	var upstreamFollowSource driver.UpstreamFollowSource
-	if node.cfg.Sync.FollowSourceEnabled() {
-		upstreamFollowSource = driver.NewL2FollowSource(node.l2FollowSource, node.l1Source)
-	}
-
-	l2Driver := driver.NewDriver(node.eventSys, node.eventDrain, &cfg.Driver, &cfg.Rollup, cfg.L1ChainConfig, l2Source, node.l1Source, upstreamFollowSource,
-		node, node.log, node.metrics, cfg.ConfigPersistence, &cfg.Sync, sequencerConductor, altDA, node.superAuthority)
+	l2Driver := driver.NewDriver(node.eventSys, node.eventDrain, &cfg.Driver, &cfg.Rollup, cfg.L1ChainConfig, l2Source, node.l1Source,
+		node, node.log, node.metrics, cfg.ConfigPersistence, &cfg.Sync, altDA)
 
 	return l2Source, l2Driver, nil
-}
-
-func initFollowSource(ctx context.Context, cfg *config.Config, node *OpNode) (*sources.FollowClient, error) {
-	rpcClient, _, err := cfg.L2FollowSource.Setup(ctx, node.log, &node.cfg.Rollup, node.metrics)
-	if err != nil {
-		return nil, fmt.Errorf("failed to setup L2 follow source RPC client: %w", err)
-	}
-	l2FollowSource, err := sources.NewFollowClient(rpcClient)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create follow client: %w", err)
-	}
-	return l2FollowSource, nil
 }
 
 func initRPCServer(cfg *config.Config, node *OpNode) (*oprpc.Server, error) {
@@ -591,7 +448,7 @@ func initP2P(cfg *config.Config, node *OpNode) (*p2p.NodeP2P, error) {
 		}
 		// embed syncDeriver and tracer(optional) to the blockReceiver to handle unsafe payloads via p2p
 		rec := p2p.NewBlockReceiver(node.log, node.metrics, node.l2Driver.SyncDeriver, node.cfg.Tracer)
-		p2pNode, err := p2p.NewNodeP2P(node.resourcesCtx, &cfg.Rollup, node.log, cfg.P2P, rec, node.l2Source, node.runCfg, node.metrics, node.clock)
+		p2pNode, err := p2p.NewNodeP2P(node.resourcesCtx, &cfg.Rollup, node.log, cfg.P2P, rec, node.l2Source, p2p.SequencerAddress(cfg.P2PSequencerAddress), node.metrics, node.clock)
 		if err != nil {
 			return nil, err
 		}
@@ -681,10 +538,6 @@ func (n *OpNode) P2P() p2p.Node {
 	return n.getP2PNodeIfEnabled()
 }
 
-func (n *OpNode) RuntimeConfig() runcfg.ReadonlyRuntimeConfig {
-	return n.runCfg
-}
-
 // Stop stops the node and closes all resources.
 // If the provided ctx is expired, the node will accelerate the stop where possible, but still fully close.
 func (n *OpNode) Stop(ctx context.Context) error {
@@ -757,11 +610,6 @@ func (n *OpNode) Stop(ctx context.Context) error {
 
 	if n.eventSys != nil {
 		n.eventSys.Stop()
-	}
-
-	// Wait for the runtime config loader to be done using the data sources before closing them
-	if n.runtimeConfigReloaderDone != nil {
-		<-n.runtimeConfigReloaderDone
 	}
 
 	// close L2 engine RPC client

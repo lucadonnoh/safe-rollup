@@ -3,14 +3,12 @@ package metrics
 import (
 	"io"
 	"sync/atomic"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 
-	"github.com/ethereum-optimism/optimism/op-batcher/config"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/log"
@@ -42,16 +40,8 @@ type Metricer interface {
 	RecordChannelFullySubmitted(id derive.ChannelID)
 	RecordChannelTimedOut(id derive.ChannelID)
 	RecordChannelQueueLength(len int)
-	RecordThrottleIntensity(intensity float64, controllerType config.ThrottleControllerType)
-	RecordThrottleParams(maxTxSize, maxBlockSize uint64)
-	RecordThrottleControllerType(controllerType config.ThrottleControllerType)
-	RecordUnsafeBytesVsThreshold(unsafeBytes, threshold uint64, controllerType config.ThrottleControllerType)
 	RecordUnsafeDABytes(int64)
 	RecordPendingBlockPruned(rawSize, daSize uint64)
-
-	// PID Controller specific metrics
-	RecordThrottleControllerState(error, integral, derivative float64)
-	RecordThrottleResponseTime(duration time.Duration)
 
 	// ClearAllStateMetrics resets any metrics that track current ChannelManager state
 	// It should be called when clearing the ChannelManager state.
@@ -60,8 +50,6 @@ type Metricer interface {
 	RecordBatchTxSubmitted()
 	RecordBatchTxSuccess()
 	RecordBatchTxFailed()
-
-	RecordBlobUsedBytes(num int)
 
 	Document() []opmetrics.DocumentedMetric
 
@@ -104,21 +92,6 @@ type Metrics struct {
 	channelQueueLength      prometheus.Gauge
 
 	batcherTxEvs opmetrics.EventVec
-
-	blobUsedBytes prometheus.Histogram
-
-	throttleIntensity      prometheus.GaugeVec
-	throttleMaxTxSize      prometheus.Gauge
-	throttleMaxBlockSize   prometheus.Gauge
-	throttleControllerType prometheus.GaugeVec
-	unsafeBytesRatio       prometheus.GaugeVec
-	throttleHistory        prometheus.Summary
-
-	// PID Controller specific metrics
-	pidControllerError      prometheus.Gauge
-	pidControllerIntegral   prometheus.Gauge
-	pidControllerDerivative prometheus.Gauge
-	pidResponseTime         prometheus.Histogram
 }
 
 var _ Metricer = (*Metrics)(nil)
@@ -224,71 +197,9 @@ func NewMetrics(procName string) *Metrics {
 			Name:      "channel_queue_length",
 			Help:      "The number of channels currently in memory.",
 		}),
-		blobUsedBytes: factory.NewHistogram(prometheus.HistogramOpts{
-			Namespace: ns,
-			Name:      "blob_used_bytes",
-			Help:      "Blob size in bytes (of last blob only for multi-blob txs).",
-			Buckets:   prometheus.LinearBuckets(0.0, eth.MaxBlobDataSize/13, 14),
-		}),
 
 		batcherTxEvs: opmetrics.NewEventVec(factory, ns, "", "batcher_tx", "BatcherTx", []string{"stage"}),
 
-		throttleIntensity: *factory.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "throttle_intensity",
-			Help:      "Current throttling intensity (0.0 = no throttling, 1.0 = max throttling)",
-		}, []string{"type"}),
-		throttleMaxTxSize: factory.NewGauge(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "throttle_max_tx_size",
-			Help:      "Current maximum transaction size when throttling (0 = no limit)",
-		}),
-		throttleMaxBlockSize: factory.NewGauge(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "throttle_max_block_size",
-			Help:      "Current maximum block size when throttling",
-		}),
-		throttleControllerType: *factory.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "throttle_controller_type",
-			Help:      "Type of throttle controller in use",
-		}, []string{"type"}),
-		unsafeBytesRatio: *factory.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "unsafe_bytes_ratio",
-			Help:      "Ratio of unsafe bytes to threshold",
-		}, []string{"type"}),
-		throttleHistory: factory.NewSummary(prometheus.SummaryOpts{
-			Namespace: ns,
-			Name:      "throttle_intensity_history",
-			Help:      "Historical throttle intensity values",
-			Objectives: map[float64]float64{
-				0.5:  0.05,  // 50th percentile with 5% error
-				0.9:  0.01,  // 90th percentile with 1% error
-				0.99: 0.001, // 99th percentile with 0.1% error
-			},
-		}),
-		pidControllerError: factory.NewGauge(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "pid_controller_error",
-			Help:      "Error term of the PID controller",
-		}),
-		pidControllerIntegral: factory.NewGauge(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "pid_controller_integral",
-			Help:      "Integral term of the PID controller",
-		}),
-		pidControllerDerivative: factory.NewGauge(prometheus.GaugeOpts{
-			Namespace: ns,
-			Name:      "pid_controller_derivative",
-			Help:      "Derivative term of the PID controller",
-		}),
-		pidResponseTime: factory.NewHistogram(prometheus.HistogramOpts{
-			Namespace: ns,
-			Name:      "pid_response_time",
-			Help:      "Response time of the PID controller",
-			Buckets:   prometheus.DefBuckets,
-		}),
 		unsafeDABytesGauge: factory.NewGauge(prometheus.GaugeOpts{
 			Namespace: ns,
 			Name:      "unsafe_da_bytes",
@@ -436,49 +347,8 @@ func (m *Metrics) RecordBatchTxFailed() {
 	m.batcherTxEvs.Record(TxStageFailed)
 }
 
-func (m *Metrics) RecordBlobUsedBytes(num int) {
-	m.blobUsedBytes.Observe(float64(num))
-}
-
 func (m *Metrics) RecordChannelQueueLength(len int) {
 	m.channelQueueLength.Set(float64(len))
-}
-
-func (m *Metrics) RecordThrottleIntensity(intensity float64, controllerType config.ThrottleControllerType) {
-	for _, t := range config.ThrottleControllerTypes {
-		if t == controllerType {
-			m.throttleIntensity.WithLabelValues(string(t)).Set(intensity)
-		} else {
-			m.throttleIntensity.WithLabelValues(string(t)).Set(0)
-		}
-	}
-	m.throttleHistory.Observe(intensity)
-}
-
-func (m *Metrics) RecordThrottleParams(maxTxSize, maxBlockSize uint64) {
-	m.throttleMaxTxSize.Set(float64(maxTxSize))
-	m.throttleMaxBlockSize.Set(float64(maxBlockSize))
-}
-
-func (m *Metrics) RecordThrottleControllerType(controllerType config.ThrottleControllerType) {
-	for _, t := range config.ThrottleControllerTypes {
-		if t == controllerType {
-			m.throttleControllerType.WithLabelValues(string(t)).Set(1)
-		} else {
-			m.throttleControllerType.WithLabelValues(string(t)).Set(0)
-		}
-	}
-}
-
-func (m *Metrics) RecordUnsafeBytesVsThreshold(unsafeBytes, threshold uint64, controllerType config.ThrottleControllerType) {
-	ratio := float64(unsafeBytes) / float64(threshold)
-	for _, t := range config.ThrottleControllerTypes {
-		if t == controllerType {
-			m.unsafeBytesRatio.WithLabelValues(string(t)).Set(ratio)
-		} else {
-			m.unsafeBytesRatio.WithLabelValues(string(t)).Set(0)
-		}
-	}
 }
 
 func (m *Metrics) RecordUnsafeDABytes(unsafeDABytes int64) {
@@ -494,16 +364,4 @@ func (m *Metrics) ClearAllStateMetrics() {
 	m.RecordChannelQueueLength(0)
 	atomic.StoreInt64(&m.pendingDABytes, 0)
 	m.pendingBlocksBytesCurrent.Set(0)
-}
-
-// RecordThrottleControllerState records the state of the PID controller
-func (m *Metrics) RecordThrottleControllerState(error, integral, derivative float64) {
-	m.pidControllerError.Set(error)
-	m.pidControllerIntegral.Set(integral)
-	m.pidControllerDerivative.Set(derivative)
-}
-
-// RecordThrottleResponseTime records the response time of the PID controller
-func (m *Metrics) RecordThrottleResponseTime(duration time.Duration) {
-	m.pidResponseTime.Observe(duration.Seconds())
 }

@@ -3,8 +3,6 @@ pragma solidity 0.8.15;
 
 // Libraries
 import { Constants } from "src/libraries/Constants.sol";
-import { L1Block_FeatureAlreadyEnabled, L1Block_NotAuthorizedToSetFeature } from "src/libraries/L1BlockErrors.sol";
-import { ProxyAdminOwnedBase } from "src/universal/ProxyAdminOwnedBase.sol";
 
 // Interfaces
 import { ISemver } from "interfaces/universal/ISemver.sol";
@@ -16,7 +14,7 @@ import { ISemver } from "interfaces/universal/ISemver.sol";
 ///         Values within this contract are updated once per epoch (every L1 block) and can only be
 ///         set by the "depositor" account, a special system address. Depositor account transactions
 ///         are created by the protocol whenever we move to a new epoch.
-contract L1Block is ISemver, ProxyAdminOwnedBase {
+contract L1Block is ISemver {
     /// @notice Address of the special depositor account.
     function DEPOSITOR_ACCOUNT() public pure returns (address addr_) {
         addr_ = Constants.DEPOSITOR_ACCOUNT;
@@ -66,24 +64,9 @@ contract L1Block is ISemver, ProxyAdminOwnedBase {
     /// @notice The DA footprint gas scalar.
     uint16 public daFootprintGasScalar;
 
-    /// @notice Mapping of system customization feature names to their enabled status.
-    ///         Once a feature is enabled, it cannot be disabled.
-    mapping(bytes32 => bool) public isFeatureEnabled;
-
-    /// @notice Emitted when a system customization feature is set.
-    /// @param feature Feature that was set.
-    /// @param enabled Whether the feature is enabled.
-    event FeatureSet(bytes32 indexed feature, bool indexed enabled);
-
     /// @custom:semver 1.9.0
     function version() public pure virtual returns (string memory) {
         return "1.9.0";
-    }
-
-    /// @notice Returns the gas paying token, its decimals, name and symbol.
-    function gasPayingToken() public pure virtual returns (address addr_, uint8 decimals_) {
-        addr_ = Constants.ETHER;
-        decimals_ = 18;
     }
 
     /// @notice Returns the gas paying token name.
@@ -100,46 +83,6 @@ contract L1Block is ISemver, ProxyAdminOwnedBase {
         symbol_ = "ETH";
     }
 
-    /// @notice Getter for custom gas token paying networks. Returns true if the
-    ///         network uses a custom gas token.
-    function isCustomGasToken() public view virtual returns (bool is_) {
-        is_ = false;
-    }
-
-    /// @custom:legacy
-    /// @notice Updates the L1 block values.
-    /// @param _number         L1 blocknumber.
-    /// @param _timestamp      L1 timestamp.
-    /// @param _basefee        L1 basefee.
-    /// @param _hash           L1 blockhash.
-    /// @param _sequenceNumber Number of L2 blocks since epoch start.
-    /// @param _batcherHash    Versioned hash to authenticate batcher by.
-    /// @param _l1FeeOverhead  L1 fee overhead.
-    /// @param _l1FeeScalar    L1 fee scalar.
-    function setL1BlockValues(
-        uint64 _number,
-        uint64 _timestamp,
-        uint256 _basefee,
-        bytes32 _hash,
-        uint64 _sequenceNumber,
-        bytes32 _batcherHash,
-        uint256 _l1FeeOverhead,
-        uint256 _l1FeeScalar
-    )
-        external
-    {
-        require(msg.sender == DEPOSITOR_ACCOUNT(), "L1Block: only the depositor account can set L1 block values");
-
-        number = _number;
-        timestamp = _timestamp;
-        basefee = _basefee;
-        hash = _hash;
-        sequenceNumber = _sequenceNumber;
-        batcherHash = _batcherHash;
-        l1FeeOverhead = _l1FeeOverhead;
-        l1FeeScalar = _l1FeeScalar;
-    }
-
     /// @notice Updates the L1 block values for an Ecotone upgraded chain.
     /// Params are packed and passed in as raw msg.data instead of ABI to reduce calldata size.
     /// Params are expected to be in the following order:
@@ -152,7 +95,7 @@ contract L1Block is ISemver, ProxyAdminOwnedBase {
     ///   7. _blobBaseFee        L1 blob base fee.
     ///   8. _hash               L1 blockhash.
     ///   9. _batcherHash        Versioned hash to authenticate batcher by.
-    function setL1BlockValuesEcotone() public {
+    function _setL1BlockValuesEcotone() internal {
         address depositor = DEPOSITOR_ACCOUNT();
         assembly {
             // Revert if the caller is not the depositor account.
@@ -185,15 +128,7 @@ contract L1Block is ISemver, ProxyAdminOwnedBase {
     ///   9. _batcherHash          Versioned hash to authenticate batcher by.
     ///   10. _operatorFeeScalar   Operator fee scalar.
     ///   11. _operatorFeeConstant Operator fee constant.
-    function setL1BlockValuesIsthmus() public {
-        setL1BlockValuesEcotone();
-        assembly {
-            // operatorFeeScalar (uint32), operatorFeeConstant (uint64)
-            sstore(operatorFeeConstant.slot, shr(160, calldataload(164)))
-        }
-    }
-
-    /// @notice Updates the L1 block values for a Jovian upgraded chain.
+        /// @notice Updates the L1 block values for a Jovian upgraded chain.
     /// Params are packed and passed in as raw msg.data instead of ABI to reduce calldata size.
     /// Params are expected to be in the following order:
     ///   1. _baseFeeScalar         L1 base fee scalar
@@ -209,7 +144,7 @@ contract L1Block is ISemver, ProxyAdminOwnedBase {
     ///   11. _operatorFeeConstant  Operator fee constant.
     ///   12. _daFootprintGasScalar DA footprint gas scalar.
     function setL1BlockValuesJovian() public {
-        setL1BlockValuesEcotone();
+        _setL1BlockValuesEcotone();
         assembly {
             // Calldata layout: operatorFeeScalar (uint32), operatorFeeConstant (uint64), daFootprintGasScalar (uint16)
             // Slot layout: daFootprintGasScalar (uint16),  operatorFeeScalar (uint32), operatorFeeConstant (uint64)
@@ -224,37 +159,6 @@ contract L1Block is ISemver, ProxyAdminOwnedBase {
             let slotVal := or(shl(96, daScalar), opFeeParams) // 96 = 32 + 64
 
             sstore(operatorFeeConstant.slot, slotVal)
-        }
-    }
-
-    /// @notice Sets a feature flag enabled.
-    ///         Once enabled, a feature cannot be disabled.
-    /// @param _feature The feature to set.
-    function setFeature(bytes32 _feature) external {
-        _assertSetFeatureAuthorized(msg.sender);
-        _setFeature(_feature);
-    }
-
-    /// @notice Internal helper to enable a feature. Reverts if the feature is already enabled.
-    /// @param _feature The feature to enable.
-    function _setFeature(bytes32 _feature) internal {
-        if (isFeatureEnabled[_feature]) revert L1Block_FeatureAlreadyEnabled();
-
-        isFeatureEnabled[_feature] = true;
-        emit FeatureSet(_feature, true);
-    }
-
-    /// @notice Reverts if the sender is not authorized to set a feature. The different callers and the motivation for
-    ///         authorization are as follows:
-    ///         - Depositor: Allows setting features by the depositor account from within the CL client's derivation
-    ///           pipeline.
-    ///         - ProxyAdmin: Allows setting system features by the L2ContractsManager.
-    ///         - ProxyAdmin Owner: Allows setting system features by a deposit transactions from the ProxyAdminOwner on
-    ///           L1.
-    /// @param _sender The address to check.
-    function _assertSetFeatureAuthorized(address _sender) internal view {
-        if (!(_sender == DEPOSITOR_ACCOUNT() || _sender == proxyAdminOwner() || _sender == address(proxyAdmin()))) {
-            revert L1Block_NotAuthorizedToSetFeature();
         }
     }
 }

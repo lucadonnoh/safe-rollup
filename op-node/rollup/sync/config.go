@@ -76,9 +76,6 @@ type Config struct {
 
 	SupportsPostFinalizationELSync bool `json:"supports_post_finalization_elsync"`
 
-	L2FollowSourceEndpoint string `json:"l2_follow_source_endpoint"`
-	NeedInitialResetEngine bool   `json:"need_initial_reset_engine"`
-
 	// OffsetELSafe retracts safe and finalized from the EL-sync tip by floor(OffsetELSafe / L2BlockTime) blocks.
 	// Zero disables (safe and finalized stay at the synced tip when EL sync completes).
 	OffsetELSafe time.Duration `json:"offset_el_safe,omitempty"`
@@ -92,8 +89,4 @@ func (c *Config) Check() error {
 		return errors.New("sync.offset-el-safe must be >= 0")
 	}
 	return nil
-}
-
-func (c *Config) FollowSourceEnabled() bool {
-	return c.L2FollowSourceEndpoint != ""
 }

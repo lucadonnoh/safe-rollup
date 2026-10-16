@@ -102,8 +102,6 @@ func (bs *BatchStage) NextBatch(ctx context.Context, parent eth.L2BlockRef) (*Si
 	case BatchUndecided: // l2 fetcher error, try again
 		batch.LogContext(bs.Log()).Warn("Undecided span batch")
 		return nil, false, NotEnoughData
-	case BatchFuture: // panic, can't happen
-		return nil, false, NewCriticalError(fmt.Errorf("impossible batch validity: %v", validity))
 	default:
 		return nil, false, NewCriticalError(fmt.Errorf("unknown batch validity type: %d", validity))
 	}
@@ -151,8 +149,6 @@ func (bs *BatchStage) nextSingularBatchCandidate(ctx context.Context, parent eth
 		case BatchUndecided: // l2 fetcher error; the span was already consumed and is skipped, not retried
 			spanBatch.LogContext(bs.Log()).Warn("Undecided span batch")
 			return nil, NotEnoughData
-		case BatchFuture: // can't happen with Holocene
-			return nil, NewCriticalError(errors.New("impossible future batch validity"))
 		}
 
 		// If next batch is SpanBatch, convert it to SingularBatches.

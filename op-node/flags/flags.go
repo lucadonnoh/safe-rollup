@@ -30,7 +30,7 @@ const (
 	SequencerCategory  = "3. SEQUENCER"
 	OperationsCategory = "4. LOGGING, METRICS, DEBUGGING, AND API"
 	P2PCategory        = "5. PEER-TO-PEER"
-	AltDACategory      = "6. ALT-DA (EXPERIMENTAL)"
+	AltDACategory      = "6. ALT-DA"
 	MiscCategory       = "7. MISC"
 	InteropCategory    = "8. INTEROP (SUPER EXPERIMENTAL)"
 )
@@ -102,13 +102,7 @@ var (
 		EnvVars:  prefixEnvVars("RPC_ADMIN_STATE"),
 		Category: OperationsCategory,
 	}
-	FetchWithdrawalRootFromState = &cli.BoolFlag{
-		Name:     "fetch-withdrawal-root-from-state",
-		Usage:    "Read withdrawal_storage_root (aka message passer storage root) from state trie (via execution layer) instead of the block header. Restores pre-Isthmus behavior, requires an archive EL client.",
-		Required: false,
-		EnvVars:  prefixEnvVars("FETCH_WITHDRAWAL_ROOT_FROM_STATE"),
-		Category: OperationsCategory,
-	}
+
 	L1TrustRPC = &cli.BoolFlag{
 		Name:     "l1.trustrpc",
 		Usage:    "Trust the L1 RPC, sync faster at risk of malicious/buggy RPC providing bad or inconsistent L1 data",
@@ -190,20 +184,7 @@ var (
 		Value:    time.Second * 10,
 		Category: RollupCategory,
 	}
-	L2FollowSource = &cli.StringFlag{
-		Name:     "l2.follow.source",
-		Usage:    "Address of L2 CL RPC HTTP endpoint to follow source",
-		EnvVars:  prefixEnvVars("L2_FOLLOW_SOURCE"),
-		Category: RollupCategory,
-		Required: false,
-	}
-	L2FollowSourceRpcTimeout = &cli.DurationFlag{
-		Name:     "l2.follow.source.rpc-timeout",
-		Usage:    "L2 follow source client rpc timeout",
-		EnvVars:  prefixEnvVars("L2_FOLLOW_SOURCE_RPC_TIMEOUT"),
-		Value:    time.Second * 10,
-		Category: RollupCategory,
-	}
+
 	VerifierL1Confs = &cli.Uint64Flag{
 		Name:     "verifier.l1-confs",
 		Usage:    "Number of L1 blocks to keep distance from the L1 head before deriving L2 data from. Reorgs are supported, but may be slow to perform.",
@@ -272,13 +253,7 @@ var (
 		Value:    time.Second * 12 * 32,
 		Category: L1RPCCategory,
 	}
-	RuntimeConfigReloadIntervalFlag = &cli.DurationFlag{
-		Name:     "l1.runtime-config-reload-interval",
-		Usage:    "Poll interval for reloading the runtime config, useful when config events are not being picked up. Disabled if 0 or negative.",
-		EnvVars:  prefixEnvVars("L1_RUNTIME_CONFIG_RELOAD_INTERVAL"),
-		Value:    time.Minute * 10,
-		Category: L1RPCCategory,
-	}
+
 	SnapshotLog = &cli.StringFlag{
 		Name:     "snapshotlog.file",
 		Usage:    "Deprecated. This flag is ignored, but here for compatibility.",
@@ -338,15 +313,6 @@ var (
 	}
 	/* Interop flags, experimental. */
 
-	IgnoreMissingPectraBlobSchedule = &cli.BoolFlag{
-		Name: "ignore-missing-pectra-blob-schedule",
-		Usage: "Ignore missing pectra blob schedule fix for Sepolia and Holesky chains. Only set if you know what you are doing!" +
-			"Ask your chain's operator for the correct Pectra blob schedule activation time and set it via the rollup.json config" +
-			"or use the --override.pectrablobschedule flag.",
-		EnvVars:  prefixEnvVars("IGNORE_MISSING_PECTRA_BLOB_SCHEDULE"),
-		Category: RollupCategory,
-		Hidden:   true,
-	}
 )
 
 var requiredFlags = []cli.Flag{
@@ -358,7 +324,6 @@ var requiredFlags = []cli.Flag{
 var optionalFlags = []cli.Flag{
 	SyncModeFlag,
 	SyncModeOffsetELSafeFlag,
-	FetchWithdrawalRootFromState,
 	L1TrustRPC,
 	L1RPCProviderKind,
 	L1RPCRateLimit,
@@ -376,7 +341,6 @@ var optionalFlags = []cli.Flag{
 	FinalityLookbackFlag,
 	FinalityDelayFlag,
 	L1EpochPollIntervalFlag,
-	RuntimeConfigReloadIntervalFlag,
 	RPCAdminPersistence,
 	SnapshotLog,
 	HeartbeatEnabledFlag,
@@ -385,9 +349,6 @@ var optionalFlags = []cli.Flag{
 	L1ChainConfig,
 	L2EngineKind,
 	L2EngineRpcTimeout,
-	L2FollowSource,
-	L2FollowSourceRpcTimeout,
-	IgnoreMissingPectraBlobSchedule,
 }
 
 var DeprecatedFlags = []cli.Flag{
@@ -427,5 +388,5 @@ func CheckRequired(ctx cliiface.Context) error {
 			return fmt.Errorf("flag %s is required", f.Names()[0])
 		}
 	}
-	return opflags.CheckRequiredXor(ctx)
+	return nil
 }

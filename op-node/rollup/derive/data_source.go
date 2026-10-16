@@ -22,12 +22,12 @@ type L1TransactionFetcher interface {
 }
 
 type AltDAInputFetcher interface {
-	// GetInput fetches the input for the given commitment from the DA service.
-	GetInput(ctx context.Context, c altda.CommitmentData) (eth.Data, error)
+	// GetInput fetches the data for the given commitment from the DA service.
+	GetInput(ctx context.Context, c altda.Commitment) ([]byte, error)
 }
 
-// DataSourceFactory reads raw transactions from a given block & then filters for
-// batch submitter transactions.
+// DataSourceFactory reads the batcher's commitments from a given block and resolves them through
+// the DA service.
 // This is not a stage in the pipeline, but a wrapper for another stage in the pipeline
 type DataSourceFactory struct {
 	log          log.Logger
@@ -40,7 +40,6 @@ func NewDataSourceFactory(log log.Logger, cfg *rollup.Config, fetcher L1Fetcher,
 	config := DataSourceConfig{
 		l1Signer:          cfg.L1Signer(),
 		batchInboxAddress: cfg.BatchInboxAddress,
-		altDAEnabled:      cfg.AltDAEnabled(),
 	}
 	return &DataSourceFactory{
 		log:          log,
@@ -52,21 +51,14 @@ func NewDataSourceFactory(log log.Logger, cfg *rollup.Config, fetcher L1Fetcher,
 
 // OpenData returns the appropriate data source for the L1 block `ref`.
 func (ds *DataSourceFactory) OpenData(ctx context.Context, ref eth.L1BlockRef, batcherAddr common.Address) (DataIter, error) {
-	// Creates a data iterator from blob or calldata source so we can forward it to the altDA source
-	// if enabled as it still requires an L1 data source for fetching input commmitments.
 	src := NewCalldataSource(ctx, ds.log, ds.dsCfg, ds.fetcher, ref, batcherAddr)
-	if ds.dsCfg.altDAEnabled {
-		// altDA([calldata | blobdata](l1Ref)) -> data
-		return NewAltDADataSource(ds.log, src, ds.altDAFetcher), nil
-	}
-	return src, nil
+	return NewAltDADataSource(ds.log, src, ds.altDAFetcher), nil
 }
 
 // DataSourceConfig regroups the mandatory rollup.Config fields needed for DataFromEVMTransactions.
 type DataSourceConfig struct {
 	l1Signer          types.Signer
 	batchInboxAddress common.Address
-	altDAEnabled      bool
 }
 
 // isValidBatchTx returns true if:

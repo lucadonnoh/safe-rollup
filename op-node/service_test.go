@@ -16,7 +16,6 @@ func syncConfigCliApp() *cli.App {
 		flags.SyncModeFlag,
 		flags.SyncModeReqRespFlag,
 		flags.SyncModeOffsetELSafeFlag,
-		flags.L2FollowSource,
 		flags.L2EngineKind,
 		flags.SkipSyncStartCheck,
 	}, flags.P2PFlags("")..., // For p2p.sync.req-resp

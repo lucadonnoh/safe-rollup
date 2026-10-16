@@ -72,11 +72,6 @@ type FinalityData struct {
 	L1Block eth.BlockID
 }
 
-type FinalizerEngine interface {
-	Finalized() eth.L2BlockRef
-	SetFinalizedHead(eth.L2BlockRef)
-}
-
 type FinalizerL1Interface interface {
 	L1BlockRefByNumber(context.Context, uint64) (eth.L1BlockRef, error)
 }

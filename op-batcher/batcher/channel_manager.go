@@ -13,7 +13,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/queue"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 )
 
 var ErrReorg = errors.New("block does not extend existing chain")
@@ -28,10 +27,9 @@ type ChannelOutFactory func(cfg ChannelConfig, rollupCfg *rollup.Config) (derive
 // channel.
 // Public functions on channelManager are safe for concurrent access.
 type channelManager struct {
-	log         log.Logger
-	metr        metrics.Metricer
-	cfgProvider ChannelConfigProvider
-	rollupCfg   *rollup.Config
+	log       log.Logger
+	metr      metrics.Metricer
+	rollupCfg *rollup.Config
 
 	outFactory ChannelOutFactory
 
@@ -44,7 +42,7 @@ type channelManager struct {
 	// The latest L1 block from all the L2 blocks in the most recently submitted channel.
 	// Used to track channel duration timeouts.
 	l1OriginLastSubmittedChannel eth.BlockID
-	// The default ChannelConfig to use for the next channel
+	// The ChannelConfig to use for new channels
 	defaultCfg ChannelConfig
 	// last block hash - for reorg detection
 	tip common.Hash
@@ -57,17 +55,14 @@ type channelManager struct {
 	txChannels map[string]*channel
 }
 
-func NewChannelManager(log log.Logger, metr metrics.Metricer, cfgProvider ChannelConfigProvider, rollupCfg *rollup.Config) *channelManager {
-	// Amsterdam activation is unknown until the driver fetches the first L1 head. The config
-	// selected here is reassessed with the current activation status before its first submission.
+func NewChannelManager(log log.Logger, metr metrics.Metricer, cfg ChannelConfig, rollupCfg *rollup.Config) *channelManager {
 	return &channelManager{
-		log:         log,
-		metr:        metr,
-		cfgProvider: cfgProvider,
-		defaultCfg:  cfgProvider.ChannelConfig(false, false),
-		rollupCfg:   rollupCfg,
-		outFactory:  NewChannelOut,
-		txChannels:  make(map[string]*channel),
+		log:        log,
+		metr:       metr,
+		defaultCfg: cfg,
+		rollupCfg:  rollupCfg,
+		outFactory: NewChannelOut,
+		txChannels: make(map[string]*channel),
 	}
 }
 
@@ -219,50 +214,10 @@ func (s *channelManager) nextTxData(channel *channel) (txData, error) {
 
 // TxData returns the next tx data that should be submitted to L1.
 //
-// If the current channel is
-// full, it only returns the remaining frames of this channel until it got
-// successfully fully sent to L1. It returns io.EOF if there's no pending tx data.
-//
-// It will decide whether to switch DA type automatically, pricing DA under the L1 fork rules
-// active at l1Head. When switching DA type, the channelManager state will be rebuilt with a new
-// ChannelConfig.
-func (s *channelManager) TxData(l1Head *types.Header, isThrottling bool, pi pubInfo) (txData, error) {
-	l1HeadID := eth.HeaderBlockID(l1Head)
-	channel, err := s.getReadyChannel(l1HeadID, pi)
-	if err != nil {
-		return emptyTxData, err
-	}
-	// If the channel has already started being submitted,
-	// return now and ensure no requeuing happens
-	if !channel.noneSubmitted() {
-		return s.nextTxData(channel)
-	}
-
-	// Call provider method to reassess optimal DA type
-	newCfg := s.cfgProvider.ChannelConfig(isThrottling, isAmsterdamHeader(l1Head))
-
-	// No change:
-	if newCfg.UseBlobs == s.defaultCfg.UseBlobs {
-		s.log.Debug("Recomputing optimal ChannelConfig: no need to switch DA type",
-			"useBlobs", s.defaultCfg.UseBlobs)
-		return s.nextTxData(channel)
-	}
-
-	// Change:
-	s.log.Info("Recomputing optimal ChannelConfig: changing DA type and requeing blocks...",
-		"useBlobsBefore", s.defaultCfg.UseBlobs,
-		"useBlobsAfter", newCfg.UseBlobs)
-
-	// Invalidate the channel so its blocks
-	// get requeued:
-	s.handleChannelInvalidated(channel)
-
-	// Set the defaultCfg so new channels
-	// pick up the new ChannelConfig
-	s.defaultCfg = newCfg
-
-	// Try again to get data to send on chain.
-	channel, err = s.getReadyChannel(l1HeadID, pi)
+// If the current channel is full, it only returns the remaining frames of this channel until it
+// got successfully fully sent to L1. It returns io.EOF if there's no pending tx data.
+func (s *channelManager) TxData(l1Head eth.BlockID, pi pubInfo) (txData, error) {
+	channel, err := s.getReadyChannel(l1Head, pi)
 	if err != nil {
 		return emptyTxData, err
 	}
@@ -386,7 +341,6 @@ func (s *channelManager) ensureChannelWithSpace(l1Head eth.BlockID) error {
 		"compression_algo", cfg.CompressorConfig.CompressionAlgo,
 		"target_num_frames", cfg.TargetNumFrames,
 		"max_frame_size", cfg.MaxFrameSize,
-		"use_blobs", cfg.UseBlobs,
 	)
 	s.metr.RecordChannelOpened(pc.ID(), s.pendingBlocks())
 

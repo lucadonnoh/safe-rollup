@@ -436,17 +436,9 @@ func (envelope *ExecutionPayloadEnvelope) CheckBlockHash() (actual common.Hash, 
 	return blockHash, blockHash == payload.BlockHash
 }
 
-// HardforkConfig reports whether the OP-Stack hardforks relevant to payload conversion are active
-// at a given L2 block timestamp. It is satisfied by rollup.Config.
-type HardforkConfig interface {
-	IsCanyon(timestamp uint64) bool
-	IsIsthmus(timestamp uint64) bool
-}
-
 // BlockAsPayload converts a [*types.Block] to an [ExecutionPayload]. It can only be used to convert
-// OP-Stack blocks, as it follows Canyon and Isthmus rules to set the Withdrawals and
-// WithdrawalsRoot fields.
-func BlockAsPayload(bl *types.Block, config HardforkConfig) (*ExecutionPayload, error) {
+// OP-Stack blocks, as it follows Isthmus rules to set the Withdrawals and WithdrawalsRoot fields.
+func BlockAsPayload(bl *types.Block) (*ExecutionPayload, error) {
 	baseFee, overflow := uint256.FromBig(bl.BaseFee())
 	if overflow {
 		return nil, fmt.Errorf("invalid base fee in block: %s", bl.BaseFee())
@@ -480,22 +472,15 @@ func BlockAsPayload(bl *types.Block, config HardforkConfig) (*ExecutionPayload, 
 		Transactions:  opaqueTxs,
 		ExcessBlobGas: (*Uint64Quantity)(bl.ExcessBlobGas()),
 		BlobGasUsed:   (*Uint64Quantity)(bl.BlobGasUsed()),
-		// WithdrawalsRoot is only set starting at Isthmus
+		Withdrawals:   &types.Withdrawals{},
+		// WithdrawalsRoot holds the L2ToL1MessagePasser storage root.
+		WithdrawalsRoot: bl.Header().WithdrawalsHash,
 	}
-
-	if config.IsCanyon(uint64(payload.Timestamp)) {
-		payload.Withdrawals = &types.Withdrawals{}
-	}
-
-	if config.IsIsthmus(uint64(payload.Timestamp)) {
-		payload.WithdrawalsRoot = bl.Header().WithdrawalsHash
-	}
-
 	return payload, nil
 }
 
-func BlockAsPayloadEnv(bl *types.Block, config HardforkConfig) (*ExecutionPayloadEnvelope, error) {
-	payload, err := BlockAsPayload(bl, config)
+func BlockAsPayloadEnv(bl *types.Block) (*ExecutionPayloadEnvelope, error) {
+	payload, err := BlockAsPayload(bl)
 	if err != nil {
 		return nil, err
 	}

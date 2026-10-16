@@ -9,7 +9,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 
-	"github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/log"
@@ -37,6 +36,10 @@ type L1Fetcher interface {
 	L1TransactionFetcher
 }
 
+type L1BlockRefByHashFetcher interface {
+	L1BlockRefByHash(context.Context, common.Hash) (eth.L1BlockRef, error)
+}
+
 type ResettableStage interface {
 	// Reset resets a pull stage. `base` refers to the L1 Block Reference to reset to, with corresponding configuration.
 	Reset(ctx context.Context, base eth.L1BlockRef, baseCfg eth.SystemConfig) error
@@ -47,10 +50,6 @@ type ResettableStage interface {
 // is called by the owning Pipeline in a loop over all stages.
 type ChannelFlusher interface {
 	FlushChannel()
-}
-
-type ForkTransformer interface {
-	Transform(forks.Name)
 }
 
 type L2Source interface {
@@ -105,17 +104,17 @@ func NewDerivationPipeline(log log.Logger, rollupCfg *rollup.Config, l1Fetcher L
 	l1Traversal := NewL1Traversal(log, rollupCfg, l1Fetcher)
 	dataSrc := NewDataSourceFactory(log, rollupCfg, l1Fetcher, altDA) // auxiliary stage for L1Retrieval
 	l1Src := NewL1Retrieval(log, dataSrc, l1Traversal)
-	frameQueue := NewFrameQueue(log, rollupCfg, l1Src)
-	channelMux := NewChannelMux(log, spec, frameQueue, metrics)
-	chInReader := NewChannelInReader(rollupCfg, log, channelMux, metrics)
-	batchMux := NewBatchMux(log, rollupCfg, chInReader, l2Source)
+	frameQueue := NewFrameQueue(log, l1Src)
+	channelAssembler := NewChannelAssembler(log, spec, frameQueue, metrics)
+	chInReader := NewChannelInReader(rollupCfg, log, channelAssembler, metrics)
+	batchStage := NewBatchStage(log, rollupCfg, chInReader, l2Source)
 	attrBuilder := NewFetchingAttributesBuilder(rollupCfg, l1ChainConfig, l1Fetcher, l2Source)
-	attributesQueue := NewAttributesQueue(log, rollupCfg, attrBuilder, batchMux)
+	attributesQueue := NewAttributesQueue(log, rollupCfg, attrBuilder, batchStage)
 
 	// Reset from ResetEngine then up from L1 Traversal. The stages do not talk to each other during
 	// the ResetEngine, but after the ResetEngine, this is the order in which the stages could talk to each other.
 	// Note: The ResetEngine is the only reset that can fail.
-	stages := []ResettableStage{l1Traversal, l1Src, frameQueue, channelMux, chInReader, batchMux, attributesQueue}
+	stages := []ResettableStage{l1Traversal, l1Src, frameQueue, channelAssembler, chInReader, batchStage, attributesQueue}
 
 	return &DerivationPipeline{
 		log:       log,
@@ -203,7 +202,6 @@ func (dp *DerivationPipeline) Step(ctx context.Context, pendingSafeHead eth.L2Bl
 		if err := VerifyNewL1Origin(ctx, prevOrigin, dp.l1Fetcher, newOrigin); err != nil {
 			return nil, fmt.Errorf("failed to verify L1 origin transition: %w", err)
 		}
-		dp.transformStages(prevOrigin, newOrigin)
 		dp.origin = newOrigin
 	}
 
@@ -263,20 +261,6 @@ func (dp *DerivationPipeline) initialReset(ctx context.Context, resetL2Safe eth.
 	dp.resetSysConfig = sysCfg
 	dp.resetL2Safe = resetL2Safe
 	return nil
-}
-
-func (db *DerivationPipeline) transformStages(oldOrigin, newOrigin eth.L1BlockRef) {
-	fork := db.rollupCfg.IsActivationBlock(oldOrigin.Time, newOrigin.Time)
-	if fork == forks.None {
-		return
-	}
-
-	db.log.Info("Transforming stages", "fork", fork)
-	for _, stage := range db.stages {
-		if tf, ok := stage.(ForkTransformer); ok {
-			tf.Transform(fork)
-		}
-	}
 }
 
 func (dp *DerivationPipeline) ConfirmEngineReset() {

@@ -74,8 +74,8 @@ var (
 	}
 	MaxL1TxSizeBytesFlag = &cli.Uint64Flag{
 		Name:    "max-l1-tx-size-bytes",
-		Usage:   "The maximum size of a batch tx submitted to L1. Ignored for blobs, where max blob size will be used.",
-		Value:   120_000, // will be overwritten to max for blob da-type
+		Usage:   "The maximum size of a frame posted to the DA server.",
+		Value:   120_000,
 		EnvVars: prefixEnvVars("MAX_L1_TX_SIZE_BYTES"),
 	}
 	MaxBlocksPerSpanBatch = &cli.IntFlag{
@@ -85,7 +85,7 @@ var (
 	}
 	TargetNumFramesFlag = &cli.IntFlag{
 		Name:    "target-num-frames",
-		Usage:   "The target number of frames to create per channel. Controls number of blobs per blob tx, if using Blob DA.",
+		Usage:   "The target number of frames to create per channel.",
 		Value:   1,
 		EnvVars: prefixEnvVars("TARGET_NUM_FRAMES"),
 	}
@@ -127,16 +127,6 @@ var (
 		Value:       0,
 		EnvVars:     prefixEnvVars("BATCH_TYPE"),
 		DefaultText: "singular",
-	}
-	DataAvailabilityTypeFlag = &cli.GenericFlag{
-		Name: "data-availability-type",
-		Usage: "The data availability type to use for submitting batches to the L1. Valid options: " +
-			openum.EnumString(DataAvailabilityTypes),
-		Value: func() *DataAvailabilityType {
-			out := CalldataType
-			return &out
-		}(),
-		EnvVars: prefixEnvVars("DATA_AVAILABILITY_TYPE"),
 	}
 	ActiveSequencerCheckDurationFlag = &cli.DurationFlag{
 		Name:    "active-sequencer-check-duration",
@@ -184,18 +174,16 @@ var optionalFlags = []cli.Flag{
 	StoppedFlag,
 	SequencerHDPathFlag,
 	BatchTypeFlag,
-	DataAvailabilityTypeFlag,
 	ActiveSequencerCheckDurationFlag,
 	CompressionAlgoFlag,
 }
 
 func init() {
-	optionalFlags = append(optionalFlags, ThrottleFlags...)
 	optionalFlags = append(optionalFlags, oprpc.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, logcli.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, opmetrics.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, oppprof.CLIFlags(EnvVarPrefix)...)
-	optionalFlags = append(optionalFlags, txmgr.CLIFlagsWithBTO(EnvVarPrefix)...)
+	optionalFlags = append(optionalFlags, txmgr.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, altda.CLIFlags(EnvVarPrefix, "")...)
 
 	Flags = append(requiredFlags, optionalFlags...)

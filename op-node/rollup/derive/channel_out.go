@@ -252,7 +252,7 @@ func PayloadToSingularBatch(rollupCfg *rollup.Config, payload *eth.ExecutionPayl
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not decode L1 info deposit: %w", err)
 	}
-	l1Info, err := L1BlockInfoFromBytes(rollupCfg, uint64(payload.Timestamp), deposit.Data)
+	l1Info, err := L1BlockInfoFromBytes(deposit.Data)
 	if err != nil {
 		return nil, l1Info, fmt.Errorf("could not parse the L1 Info deposit: %w", err)
 	}

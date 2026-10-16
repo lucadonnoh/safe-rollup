@@ -53,8 +53,7 @@ func TestProcessSystemConfigUpdateLogEvent(t *testing.T) {
 		hook   func(*testing.T, *types.Log) *types.Log
 		err    bool
 		// forks (optional)
-		ecotoneTime *uint64
-		l1Time      uint64
+		l1Time uint64
 	}{
 		{
 			// The log data is ignored by consensus and no modifications to the
@@ -102,7 +101,7 @@ func TestProcessSystemConfigUpdateLogEvent(t *testing.T) {
 			err: false,
 		},
 		{
-			// The overhead and the scalar should be updated.
+			// The scalar should be updated, the overhead is ignored.
 			name: "GasConfig",
 			log: &types.Log{
 				Topics: []common.Hash{
@@ -122,8 +121,7 @@ func TestProcessSystemConfigUpdateLogEvent(t *testing.T) {
 				return log
 			},
 			config: eth.SystemConfig{
-				Overhead: eth.Bytes32{31: 0xff},
-				Scalar:   eth.Bytes32{31: 0xaa},
+				Scalar: eth.Bytes32{31: 0xaa},
 			},
 			err: false,
 		},
@@ -175,9 +173,8 @@ func TestProcessSystemConfigUpdateLogEvent(t *testing.T) {
 			config: eth.SystemConfig{
 				Scalar: eth.Bytes32{0: 1, 24 + 3: 0xb3, 28 + 3: 0xbb},
 			},
-			err:         false,
-			ecotoneTime: new(uint64), // activate ecotone
-			l1Time:      200,
+			err:    false,
+			l1Time: 200,
 		},
 		{
 			name: "OneTopic",
@@ -353,7 +350,7 @@ func TestProcessSystemConfigUpdateLogEvent(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			config := eth.SystemConfig{}
-			rollupCfg := rollup.Config{EcotoneTime: test.ecotoneTime}
+			rollupCfg := rollup.Config{}
 
 			err := ProcessSystemConfigUpdateLogEvent(&config, test.hook(t, test.log), &rollupCfg, test.l1Time)
 			if test.err {

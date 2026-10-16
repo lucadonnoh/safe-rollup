@@ -5,7 +5,6 @@ pragma solidity 0.8.15;
 import { Test } from "test/setup/Test.sol";
 
 // Scripts
-import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
 
 // Libraries
 import { Bytes32AddressLib } from "@rari-capital/solmate/src/utils/Bytes32AddressLib.sol";
@@ -48,11 +47,7 @@ abstract contract Proxy_TestInit is Test {
 
     function setUp() external {
         // Deploy a proxy and simple storage contract as the implementation
-        proxy = IProxy(
-            DeployUtils.create1({
-                _name: "Proxy", _args: DeployUtils.encodeConstructor(abi.encodeCall(IProxy.__constructor__, (alice)))
-            })
-        );
+        proxy = IProxy(payable(vm.deployCode("Proxy.sol:Proxy", abi.encode(alice))));
         simpleStorage = new Proxy_SimpleStorage_Harness();
 
         vm.prank(alice);

@@ -1,28 +1,10 @@
-# OP Stack Smart Contracts
+# Safe rollup contracts
 
-This package contains the L1 and L2 smart contracts for the OP Stack.
-
-## Local Development
-
-Tool versions are pinned in the monorepo `mise.toml`. From the monorepo root:
-
-```bash
-mise trust mise.toml
-mise install
-cd packages/contracts-bedrock
-just install
-```
-
-Common commands:
+L1: `src/safe-rollup` (gateway and withdrawal delay module, next to a Safe). L2: the predeploys in
+`src/L2` and `src/universal`, set up by `scripts/safe-rollup/SafeRollupGenesis.s.sol`. See
+`safe-rollup/README.md` at the repo root for the design.
 
 ```bash
 just build
 just test
-just pr
 ```
-
-`just pr` runs the local PR checks. Outside CI, it may format Solidity files before running checks.
-
-For more information, check out the [book][book].
-
-[book]: https://devdocs.optimism.io/contracts-bedrock

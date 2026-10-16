@@ -101,19 +101,13 @@ func newMiniL2BlockWithChainIDAndNumberParent(numTx int, chainID *big.Int, numbe
 //
 // If numTx > 0, that many empty DynamicFeeTxs will be added to the txs with the specified chain ID.
 func newMiniL2BlockWithChainIDNumberParentAndL1Information(numTx int, chainID *big.Int, l2Number *big.Int, parent common.Hash, l1Number int64, blockTime uint64) *types.Block {
-	// Create a rollup config with the specified chain ID
-	rollupConfig := &rollup.Config{
-		Genesis:   rollup.Genesis{L2: eth.BlockID{Number: 0}},
-		L2ChainID: chainID,
-	}
-
 	l1Block := types.NewBlock(&types.Header{
 		BaseFee:    big.NewInt(10),
 		Difficulty: common.Big0,
 		Number:     big.NewInt(l1Number),
 		Time:       blockTime,
 	}, nil, nil, trie.NewStackTrie(nil), types.DefaultBlockConfig)
-	l1InfoTx, err := derive.L1InfoDeposit(rollupConfig, params.MergedTestChainConfig, eth.SystemConfig{}, 0, eth.BlockToInfo(l1Block), blockTime)
+	l1InfoTx, err := derive.L1InfoDeposit(params.MergedTestChainConfig, eth.SystemConfig{}, 0, eth.BlockToInfo(l1Block))
 	if err != nil {
 		panic(err)
 	}
@@ -355,7 +349,6 @@ func TestChannelBuilderBatchType(t *testing.T) {
 		f    func(t *testing.T, batchType uint)
 	}{
 		{"ChannelBuilder_MaxRLPBytesPerChannel", ChannelBuilder_MaxRLPBytesPerChannel},
-		{"ChannelBuilder_MaxRLPBytesPerFjord", ChannelBuilder_MaxRLPBytesPerChannelFjord},
 		{"ChannelBuilder_OutputFramesMaxFrameIndex", ChannelBuilder_OutputFramesMaxFrameIndex},
 		{"ChannelBuilder_AddBlock", ChannelBuilder_AddBlock},
 		{"ChannelBuilder_PendingFrames_TotalFrames", ChannelBuilder_PendingFrames_TotalFrames},
@@ -585,51 +578,6 @@ func ChannelBuilder_MaxRLPBytesPerChannel(t *testing.T, batchType uint) {
 	require.ErrorIs(t, err, derive.ErrTooManyRLPBytes)
 }
 
-// ChannelBuilder_MaxRLPBytesPerChannelFjord tests the [ChannelBuilder.OutputFrames]
-// function works as intended postFjord.
-// strategy:
-// check preFjord how many blocks to fill the channel
-// then check postFjord w/ double the amount of blocks
-func ChannelBuilder_MaxRLPBytesPerChannelFjord(t *testing.T, batchType uint) {
-	t.Parallel()
-	log := testlog.Logger(t, log.LevelInfo)
-	channelConfig := defaultTestChannelConfig()
-	chainSpec := rollup.NewChainSpec(defaultTestRollupConfig)
-	channelConfig.MaxFrameSize = chainSpec.MaxRLPBytesPerChannel(latestL1BlockOrigin) * 2
-	channelConfig.InitNoneCompressor()
-	channelConfig.BatchType = batchType
-
-	// Construct the channel builder
-	cb, err := newChannelBuilder(log, channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
-	require.NoError(t, err)
-
-	// Count how many a block that overflows the [ChannelOut]
-	blockCount, err := addTooManyBlocks(cb, 10_000)
-	require.ErrorIs(t, err, derive.ErrTooManyRLPBytes)
-
-	// Create a new channel builder with fjord fork
-	now := time.Now()
-	fjordTime := uint64(now.Add(-1 * time.Second).Unix())
-	rollupConfig := &rollup.Config{
-		Genesis:   rollup.Genesis{L2: eth.BlockID{Number: 0}},
-		L2ChainID: big.NewInt(1234),
-		FjordTime: &fjordTime,
-	}
-
-	chainSpec = rollup.NewChainSpec(rollupConfig)
-	channelConfig.MaxFrameSize = chainSpec.MaxRLPBytesPerChannel(uint64(now.Unix())) * 2
-	channelConfig.InitNoneCompressor()
-	channelConfig.BatchType = batchType
-
-	cb, err = newChannelBuilder(log, channelConfig, rollupConfig, latestL1BlockOrigin)
-	require.NoError(t, err)
-
-	// try add double the amount of block, it should not error
-	_, err = addTooManyBlocks(cb, 2*blockCount)
-
-	require.NoError(t, err)
-}
-
 // ChannelBuilder_OutputFramesMaxFrameIndex tests the [ChannelBuilder.OutputFrames]
 // function errors when the max frame index is reached.
 func ChannelBuilder_OutputFramesMaxFrameIndex(t *testing.T, batchType uint) {
@@ -685,7 +633,7 @@ func TestChannelBuilder_FullShadowCompressor(t *testing.T) {
 	cb, err := newChannelBuilder(log, cfg, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(err)
 
-	rng := rand.New(rand.NewSource(420))
+	rng := rand.New(rand.NewSource(15))
 	a := dtest.RandomL2BlockWithChainId(rng, 1, defaultTestRollupConfig.L2ChainID)
 	_, err = cb.AddBlock(mustSizedBlockFromGeth(a))
 	require.NoError(err)
@@ -1068,7 +1016,7 @@ func mustPayloadFromGeth(block *types.Block) *eth.ExecutionPayload {
 		hdr.BaseFee = new(big.Int)
 		convert = types.NewBlockWithHeader(hdr).WithBody(*block.Body())
 	}
-	payload, err := eth.BlockAsPayload(convert, defaultTestRollupConfig)
+	payload, err := eth.BlockAsPayload(convert)
 	if err != nil {
 		panic(err)
 	}

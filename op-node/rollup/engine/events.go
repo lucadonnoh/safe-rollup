@@ -108,7 +108,7 @@ func (ev InteropReplacedBlockEvent) String() string {
 type ResetEngineControl interface {
 	SetUnsafeHead(eth.L2BlockRef)
 	SetLocalSafeHead(ref eth.L2BlockRef)
-	SetDeprecatedSafeHead(eth.L2BlockRef)
+	RecordSafeHead(eth.L2BlockRef)
 	SetFinalizedHead(eth.L2BlockRef)
 	SetBackupUnsafeL2Head(block eth.L2BlockRef, triggerReorg bool)
 	SetPendingSafeL2Head(eth.L2BlockRef)
@@ -122,7 +122,7 @@ func ForceEngineReset(ec ResetEngineControl, localUnsafe, localSafe, crossSafe, 
 	ec.SetPendingSafeL2Head(localSafe)
 
 	// "safe" in RPC terms is cross-safe
-	ec.SetDeprecatedSafeHead(crossSafe)
+	ec.RecordSafeHead(crossSafe)
 
 	// finalized head
 	ec.SetFinalizedHead(finalized)

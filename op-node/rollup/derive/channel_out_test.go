@@ -89,7 +89,7 @@ func TestChannelOutAddBlock(t *testing.T) {
 					},
 				},
 			)
-			payload, err := eth.BlockAsPayload(block, &rollupCfg)
+			payload, err := eth.BlockAsPayload(block)
 			require.NoError(t, err)
 			_, err = cout.AddBlock(&rollupCfg, payload)
 			require.Error(t, err)
@@ -460,7 +460,7 @@ func testSpanChannelOut_MaxBlocksPerSpanBatch(t *testing.T, tt maxBlocksTest) {
 	require.False(t, ch.IsReady())
 	require.NoError(t, ch.AddFrame(frame, l1Origin))
 	require.True(t, ch.IsReady())
-	br, err := BatchReader(ch.Reader(), spec.MaxRLPBytesPerChannel(0), true)
+	br, err := BatchReader(ch.Reader(), spec.MaxRLPBytesPerChannel(0))
 	require.NoError(t, err)
 
 	sbs := make([]*SingularBatch, 0, tt.numBatches-1)
@@ -529,11 +529,11 @@ func testSpanChannelOut_MaxRLPBytesPerChannel(t *testing.T, algo CompressionAlgo
 func TestPayloadToSingularBatchParity(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x543331))
 	batch := RandomSingularBatch(rng, 4, rollupCfg.L2ChainID)
-	l1InfoTx, err := L1InfoDeposit(&rollupCfg, params.MergedTestChainConfig, eth.SystemConfig{}, 0, &testutils.MockBlockInfo{
+	l1InfoTx, err := L1InfoDeposit(params.MergedTestChainConfig, eth.SystemConfig{}, 0, &testutils.MockBlockInfo{
 		InfoNum:     uint64(batch.EpochNum),
 		InfoHash:    batch.EpochHash,
 		InfoBaseFee: big.NewInt(1),
-	}, batch.Timestamp)
+	})
 	require.NoError(t, err)
 	txs := []*types.Transaction{testutils.TxFromDeposit(l1InfoTx)}
 	for i, opaqueTx := range batch.Transactions {
@@ -548,7 +548,7 @@ func TestPayloadToSingularBatchParity(t *testing.T) {
 		BaseFee: big.NewInt(7),
 	}).WithBody(types.Body{Transactions: txs})
 
-	payload, err := eth.BlockAsPayload(block, &rollupCfg)
+	payload, err := eth.BlockAsPayload(block)
 	require.NoError(t, err)
 
 	batch, l1Info, err := PayloadToSingularBatch(&rollupCfg, payload)
@@ -576,7 +576,7 @@ func TestPayloadToSingularBatchParity(t *testing.T) {
 
 	// A payload whose first tx is not a deposit is rejected.
 	userOnly, err := eth.BlockAsPayload(types.NewBlockWithHeader(block.Header()).WithBody(
-		types.Body{Transactions: block.Transactions()[1:2]}), &rollupCfg)
+		types.Body{Transactions: block.Transactions()[1:2]}))
 	require.NoError(t, err)
 	_, _, err = PayloadToSingularBatch(&rollupCfg, userOnly)
 	require.ErrorIs(t, err, ErrNotDepositTx)
@@ -616,11 +616,11 @@ func TestSpanChannelOutAddBlockPostExec(t *testing.T) {
 func postExecTestPayload(t *testing.T) *eth.ExecutionPayload {
 	rng := rand.New(rand.NewSource(0x7d0b10c))
 	batch := RandomSingularBatch(rng, 1, rollupCfg.L2ChainID)
-	l1InfoTx, err := L1InfoDeposit(&rollupCfg, params.MergedTestChainConfig, eth.SystemConfig{}, 0, &testutils.MockBlockInfo{
+	l1InfoTx, err := L1InfoDeposit(params.MergedTestChainConfig, eth.SystemConfig{}, 0, &testutils.MockBlockInfo{
 		InfoNum:     uint64(batch.EpochNum),
 		InfoHash:    batch.EpochHash,
 		InfoBaseFee: big.NewInt(1),
-	}, batch.Timestamp)
+	})
 	require.NoError(t, err)
 
 	userTx := new(types.Transaction)
@@ -635,7 +635,7 @@ func postExecTestPayload(t *testing.T) *eth.ExecutionPayload {
 		BaseFee: big.NewInt(7),
 	}).WithBody(types.Body{Transactions: txs})
 
-	payload, err := eth.BlockAsPayload(block, &rollupCfg)
+	payload, err := eth.BlockAsPayload(block)
 	require.NoError(t, err)
 	return payload
 }

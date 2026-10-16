@@ -4,16 +4,16 @@ import (
 	"context"
 	"io"
 
-	"github.com/ethereum-optimism/optimism/op-core/forks"
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/log"
 )
 
-var (
-	_ NextFrameProvider = (*FrameQueue)(nil)
-	_ ForkTransformer   = (*FrameQueue)(nil)
-)
+var _ NextFrameProvider = (*FrameQueue)(nil)
+
+type NextFrameProvider interface {
+	NextFrame(ctx context.Context) (Frame, error)
+	Origin() eth.L1BlockRef
+}
 
 //go:generate mockery --name NextDataProvider --case snake
 type NextDataProvider interface {
@@ -25,23 +25,12 @@ type FrameQueue struct {
 	log    log.Logger
 	frames []Frame
 	prev   NextDataProvider
-	cfg    *rollup.Config
 }
 
-func NewFrameQueue(log log.Logger, cfg *rollup.Config, prev NextDataProvider) *FrameQueue {
+func NewFrameQueue(log log.Logger, prev NextDataProvider) *FrameQueue {
 	return &FrameQueue{
 		log:  log,
 		prev: prev,
-		cfg:  cfg,
-	}
-}
-
-func (fq *FrameQueue) Transform(f forks.Name) {
-	switch f {
-	case forks.Holocene:
-		fq.log.Info("FrameQueue: resetting with Holocene activation")
-		// With Holocene activation, the frame queue is simply reset
-		fq.reset()
 	}
 }
 
@@ -84,13 +73,9 @@ func (fq *FrameQueue) loadNextFrames(ctx context.Context) error {
 	// prunes all frames that were parsed. An even more memory-efficient implementation could prune
 	// the frame queue each time after pulling out only a single frame.
 
-	if fq.cfg.IsHolocene(fq.Origin().Time) {
-		// We only need to prune the queue after adding more frames to it.
-		// Moving frames out of the queue to the next stage cannot invalidate any frames in
-		// the queue.
-		fq.prune()
-	}
-
+	// We only need to prune the queue after adding more frames to it. Moving frames out of the
+	// queue to the next stage cannot invalidate any frames in the queue.
+	fq.prune()
 	return nil
 }
 

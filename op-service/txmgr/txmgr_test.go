@@ -2,16 +2,13 @@ package txmgr
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"math"
 	"math/big"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum"
@@ -19,11 +16,9 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
-	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr/metrics"
@@ -33,39 +28,12 @@ const (
 	startingNonce = 1 // we pick something other than 0 so we can confirm nonces are getting set properly
 )
 
-var (
-	blobData1 = eth.Data("this is a blob!")
-	blobData2 = eth.Data("amazing, the txmgr can handle more than one blob in a tx!!")
-)
-
 type sendTransactionFunc func(ctx context.Context, tx *types.Transaction) error
 
 func testSendState() *SendState {
 	return NewSendState(100, time.Hour)
 }
 
-// mockBlobTipOracle is a mock implementation of BlobTipOracle for testing.
-type mockBlobTipOracle struct {
-	suggestedTip *big.Int
-	err          error
-}
-
-func (m *mockBlobTipOracle) Start() error {
-	return nil
-}
-
-func (m *mockBlobTipOracle) SuggestBlobTipCap(ctx context.Context, maxBlocks int, percentile int) (*big.Int, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.suggestedTip, nil
-}
-
-func (m *mockBlobTipOracle) Close() {}
-
-var _ blobTipOracle = (*mockBlobTipOracle)(nil)
-
-// testHarness houses the necessary resources to test the SimpleTxManager.
 type testHarness struct {
 	cfg       *Config
 	mgr       *SimpleTxManager
@@ -105,21 +73,6 @@ func (h testHarness) createTxCandidate() TxCandidate {
 	}
 }
 
-// createBlobTxCandidate creates a mock [TxCandidate] that results in a blob tx
-func (h testHarness) createBlobTxCandidate() TxCandidate {
-	inbox := common.HexToAddress("0x42000000000000000000000000000000000000ff")
-
-	var b1, b2 eth.Blob
-	_ = b1.FromData(blobData1)
-	_ = b2.FromData(blobData2)
-	return TxCandidate{
-		To:       &inbox,
-		TxData:   []byte{0x00, 0x01, 0x02, 0x03},
-		GasLimit: uint64(1337),
-		Blobs:    []*eth.Blob{&b1, &b2},
-	}
-}
-
 func configWithNumConfs(numConfirmations uint64) *Config {
 	cfg := Config{
 		ChainID:                   big.NewInt(1),
@@ -134,13 +87,11 @@ func configWithNumConfs(numConfirmations uint64) *Config {
 		RetryInterval:  1 * time.Millisecond,
 		NetworkTimeout: 1 * time.Second,
 		MaxRetries:     5,
-		CellProofTime:  math.MaxUint64,
 	}
 
 	cfg.RebroadcastInterval.Store(int64(time.Second / 2))
 	cfg.ResubmissionTimeout.Store(int64(time.Second))
 	cfg.FeeLimitMultiplier.Store(5)
-	cfg.MinBlobTxFee.Store(defaultMinBlobTxFee)
 
 	return &cfg
 }
@@ -150,7 +101,6 @@ type gasPricer struct {
 	mineAtEpoch   int64
 	baseGasTipFee *big.Int
 	baseBaseFee   *big.Int
-	blobBaseFee   *big.Int
 	err           error
 	mu            sync.Mutex
 }
@@ -165,36 +115,25 @@ func newGasPricer(mineAtEpoch int64) *gasPricer {
 		mineAtEpoch:   mineAtEpoch,
 		baseGasTipFee: big.NewInt(baseGasTipFee),
 		baseBaseFee:   big.NewInt(baseBaseFee),
-		blobBaseFee:   big.NewInt(50),
 	}
 }
 
 func (g *gasPricer) expGasFeeCap() *big.Int {
-	_, gasFeeCap, _ := g.feesForEpoch(g.mineAtEpoch)
+	_, gasFeeCap := g.feesForEpoch(g.mineAtEpoch)
 	return gasFeeCap
-}
-
-func (g *gasPricer) expBlobFeeCap() *big.Int {
-	_, _, blobBaseFee := g.feesForEpoch(g.mineAtEpoch)
-	return blobBaseFee
 }
 
 func (g *gasPricer) shouldMine(gasFeeCap *big.Int) bool {
 	return g.expGasFeeCap().Cmp(gasFeeCap) <= 0
 }
 
-func (g *gasPricer) shouldMineBlobTx(gasFeeCap, blobFeeCap *big.Int) bool {
-	return g.shouldMine(gasFeeCap) && g.expBlobFeeCap().Cmp(blobFeeCap) <= 0
-}
-
-func (g *gasPricer) feesForEpoch(epoch int64) (*big.Int, *big.Int, *big.Int) {
+func (g *gasPricer) feesForEpoch(epoch int64) (*big.Int, *big.Int) {
 	e := big.NewInt(epoch)
 	epochBaseFee := new(big.Int).Mul(g.baseBaseFee, e)
 	epochGasTipCap := new(big.Int).Mul(g.baseGasTipFee, e)
 	epochGasFeeCap := calcGasFeeCap(epochBaseFee, epochGasTipCap)
-	epochBlobBaseFee := new(big.Int).Mul(g.blobBaseFee, new(big.Int).Exp(big.NewInt(2), e, nil))
 
-	return epochGasTipCap, epochGasFeeCap, epochBlobBaseFee
+	return epochGasTipCap, epochGasFeeCap
 }
 
 func (g *gasPricer) baseFee() *big.Int {
@@ -203,19 +142,16 @@ func (g *gasPricer) baseFee() *big.Int {
 	return new(big.Int).Mul(g.baseBaseFee, big.NewInt(g.epoch))
 }
 
-func (g *gasPricer) sample() (*big.Int, *big.Int, *big.Int) {
+func (g *gasPricer) sample() (*big.Int, *big.Int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	g.epoch++
-	epochGasTipCap, epochGasFeeCap, epochBlobBaseFee := g.feesForEpoch(g.epoch)
-
-	return epochGasTipCap, epochGasFeeCap, epochBlobBaseFee
+	return g.feesForEpoch(g.epoch)
 }
 
 type minedTxInfo struct {
 	gasFeeCap   *big.Int
-	blobFeeCap  *big.Int
 	blockNumber uint64
 }
 
@@ -250,7 +186,7 @@ func (b *mockBackend) setTxSender(s sendTransactionFunc) {
 // mine records a (txHash, gasFeeCap) as confirmed. Subsequent calls to
 // TransactionReceipt with a matching txHash will result in a non-nil receipt.
 // If a nil txHash is supplied this has the effect of mining an empty block.
-func (b *mockBackend) mine(txHash *common.Hash, gasFeeCap, blobFeeCap *big.Int) {
+func (b *mockBackend) mine(txHash *common.Hash, gasFeeCap *big.Int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -258,7 +194,6 @@ func (b *mockBackend) mine(txHash *common.Hash, gasFeeCap, blobFeeCap *big.Int) 
 	if txHash != nil {
 		b.minedTxs[*txHash] = minedTxInfo{
 			gasFeeCap:   gasFeeCap,
-			blobFeeCap:  blobFeeCap,
 			blockNumber: b.blockHeight,
 		}
 	}
@@ -302,7 +237,7 @@ func (b *mockBackend) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (ui
 }
 
 func (b *mockBackend) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
-	tip, _, _ := b.g.sample()
+	tip, _ := b.g.sample()
 	return tip, nil
 }
 
@@ -327,8 +262,7 @@ func (*mockBackend) ChainID(ctx context.Context) (*big.Int, error) {
 
 // TransactionReceipt queries the mockBackend for a mined txHash. If none is found, nil is returned
 // for both return values. Otherwise, it returns a receipt containing the txHash, the gasFeeCap
-// used in GasUsed, and the blobFeeCap in CumulativeGasUsed to make the values accessible from our
-// test framework.
+// used in GasUsed to make the value accessible from our test framework.
 func (b *mockBackend) TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -340,23 +274,14 @@ func (b *mockBackend) TransactionReceipt(ctx context.Context, txHash common.Hash
 
 	// Return the gas fee cap for the transaction in the GasUsed field so that
 	// we can assert the proper tx confirmed in our tests.
-	var blobFeeCap uint64
-	if txInfo.blobFeeCap != nil {
-		blobFeeCap = bigs.Uint64Strict(txInfo.blobFeeCap)
-	}
 	return &types.Receipt{
-		TxHash:            txHash,
-		GasUsed:           bigs.Uint64Strict(txInfo.gasFeeCap),
-		CumulativeGasUsed: blobFeeCap,
-		BlockNumber:       big.NewInt(int64(txInfo.blockNumber)),
+		TxHash:      txHash,
+		GasUsed:     bigs.Uint64Strict(txInfo.gasFeeCap),
+		BlockNumber: big.NewInt(int64(txInfo.blockNumber)),
 	}, nil
 }
 
 func (b *mockBackend) Close() {
-}
-
-func (b *mockBackend) BlobBaseFee(ctx context.Context) (*big.Int, error) {
-	return big.NewInt(0), nil
 }
 
 type testSendVariantsFn func(ctx context.Context, h *testHarness, tx TxCandidate) (*types.Receipt, error)
@@ -389,7 +314,7 @@ func TestTxMgrConfirmAtMinGasPrice(t *testing.T) {
 
 	gasPricer := newGasPricer(1)
 
-	gasTipCap, gasFeeCap, _ := gasPricer.sample()
+	gasTipCap, gasFeeCap := gasPricer.sample()
 	tx := types.NewTx(&types.DynamicFeeTx{
 		GasTipCap: gasTipCap,
 		GasFeeCap: gasFeeCap,
@@ -398,7 +323,7 @@ func TestTxMgrConfirmAtMinGasPrice(t *testing.T) {
 	sendTx := func(ctx context.Context, tx *types.Transaction) error {
 		if gasPricer.shouldMine(tx.GasFeeCap()) {
 			txHash := tx.Hash()
-			h.backend.mine(&txHash, tx.GasFeeCap(), nil)
+			h.backend.mine(&txHash, tx.GasFeeCap())
 		}
 		return nil
 	}
@@ -420,7 +345,7 @@ func TestTxMgrNeverConfirmCancel(t *testing.T) {
 
 	h := newTestHarness(t)
 
-	gasTipCap, gasFeeCap, _ := h.gasPricer.sample()
+	gasTipCap, gasFeeCap := h.gasPricer.sample()
 	tx := types.NewTx(&types.DynamicFeeTx{
 		GasTipCap: gasTipCap,
 		GasFeeCap: gasFeeCap,
@@ -493,7 +418,7 @@ func TestTxMgrConfirmsAtHigherGasPrice(t *testing.T) {
 
 	h := newTestHarness(t)
 
-	gasTipCap, gasFeeCap, _ := h.gasPricer.sample()
+	gasTipCap, gasFeeCap := h.gasPricer.sample()
 	tx := types.NewTx(&types.DynamicFeeTx{
 		GasTipCap: gasTipCap,
 		GasFeeCap: gasFeeCap,
@@ -501,7 +426,7 @@ func TestTxMgrConfirmsAtHigherGasPrice(t *testing.T) {
 	sendTx := func(ctx context.Context, tx *types.Transaction) error {
 		if h.gasPricer.shouldMine(tx.GasFeeCap()) {
 			txHash := tx.Hash()
-			h.backend.mine(&txHash, tx.GasFeeCap(), nil)
+			h.backend.mine(&txHash, tx.GasFeeCap())
 		}
 		return nil
 	}
@@ -516,42 +441,6 @@ func TestTxMgrConfirmsAtHigherGasPrice(t *testing.T) {
 	require.Equal(t, bigs.Uint64Strict(h.gasPricer.expGasFeeCap()), receipt.GasUsed)
 }
 
-// TestTxMgrConfirmsBlobTxAtHigherGasPrice asserts that Send properly returns the max gas price
-// receipt if none of the lower gas price txs were mined when attempting to send a blob tx.
-func TestTxMgrConfirmsBlobTxAtHigherGasPrice(t *testing.T) {
-	t.Parallel()
-
-	h := newTestHarness(t)
-
-	gasTipCap, gasFeeCap, blobFeeCap := h.gasPricer.sample()
-	t.Log("Blob fee cap:", blobFeeCap, "gasFeeCap:", gasFeeCap)
-
-	tx := types.NewTx(&types.BlobTx{
-		GasTipCap:  uint256.MustFromBig(gasTipCap),
-		GasFeeCap:  uint256.MustFromBig(gasFeeCap),
-		BlobFeeCap: uint256.MustFromBig(blobFeeCap),
-	})
-	sendTx := func(ctx context.Context, tx *types.Transaction) error {
-		if h.gasPricer.shouldMineBlobTx(tx.GasFeeCap(), tx.BlobGasFeeCap()) {
-			txHash := tx.Hash()
-			h.backend.mine(&txHash, tx.GasFeeCap(), tx.BlobGasFeeCap())
-		}
-		return nil
-	}
-	h.backend.setTxSender(sendTx)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	receipt, err := h.mgr.sendTx(ctx, tx)
-	require.Nil(t, err)
-	require.NotNil(t, receipt)
-	// the fee cap for the blob tx at epoch == 3 should end up higher than the min required gas
-	// (expFeeCap()) since blob tx fee caps are bumped 100% with each epoch.
-	require.Less(t, bigs.Uint64Strict(h.gasPricer.expGasFeeCap()), receipt.GasUsed)
-	require.Equal(t, bigs.Uint64Strict(h.gasPricer.expBlobFeeCap()), receipt.CumulativeGasUsed)
-}
-
 // errRpcFailure is a sentinel error used in testing to fail publications.
 var errRpcFailure = errors.New("rpc failure")
 
@@ -563,7 +452,7 @@ func TestTxMgrBlocksOnFailingRpcCalls(t *testing.T) {
 
 	h := newTestHarness(t)
 
-	gasTipCap, gasFeeCap, _ := h.gasPricer.sample()
+	gasTipCap, gasFeeCap := h.gasPricer.sample()
 	tx := types.NewTx(&types.DynamicFeeTx{
 		GasTipCap: gasTipCap,
 		GasFeeCap: gasFeeCap,
@@ -589,7 +478,7 @@ func TestTxMgr_CraftTx(t *testing.T) {
 	candidate := h.createTxCandidate()
 
 	// Craft the transaction.
-	gasTipCap, gasFeeCap, _ := h.gasPricer.feesForEpoch(h.gasPricer.epoch + 1)
+	gasTipCap, gasFeeCap := h.gasPricer.feesForEpoch(h.gasPricer.epoch + 1)
 	tx, err := h.mgr.craftTx(context.Background(), candidate)
 	require.Nil(t, err)
 	require.NotNil(t, tx)
@@ -606,54 +495,6 @@ func TestTxMgr_CraftTx(t *testing.T) {
 	require.Equal(t, candidate.GasLimit, tx.Gas())
 }
 
-// TestTxMgr_CraftBlobTx ensures that the tx manager will create blob transactions as expected.
-func TestTxMgr_CraftBlobTx(t *testing.T) {
-	t.Parallel()
-	h := newTestHarness(t)
-	candidate := h.createBlobTxCandidate()
-
-	// Craft the transaction.
-	gasTipCap, gasFeeCap, _ := h.gasPricer.feesForEpoch(h.gasPricer.epoch + 1)
-	tx, err := h.mgr.craftTx(context.Background(), candidate)
-	require.Nil(t, err)
-	require.NotNil(t, tx)
-	require.Equal(t, byte(types.BlobTxType), tx.Type())
-
-	// Validate the gas tip cap and fee cap.
-	require.Equal(t, gasTipCap, tx.GasTipCap())
-	require.Equal(t, gasFeeCap, tx.GasFeeCap())
-	require.Equal(t, defaultMinBlobTxFee, tx.BlobGasFeeCap())
-
-	// Validate the nonce was set correctly using the backend.
-	require.Equal(t, uint64(startingNonce), tx.Nonce())
-
-	// Check that the gas was set using the gas limit.
-	require.Equal(t, candidate.GasLimit, tx.Gas())
-
-	// Check the blob fields
-	require.Equal(t, 2, len(tx.BlobHashes()))
-	sidecar := tx.BlobTxSidecar()
-	require.Equal(t, 2, len(sidecar.Blobs))
-	require.Equal(t, 2, len(sidecar.Commitments))
-	require.Equal(t, 2, len(sidecar.Proofs))
-
-	// verify the blobs
-	for i := range sidecar.Blobs {
-		require.NoError(t, kzg4844.VerifyBlobProof(&sidecar.Blobs[i], sidecar.Commitments[i], sidecar.Proofs[i]))
-	}
-	b1 := eth.Blob(sidecar.Blobs[0])
-	d1, err := b1.ToData()
-	require.NoError(t, err)
-	require.Equal(t, blobData1, d1)
-
-	b2 := eth.Blob(sidecar.Blobs[1])
-	d2, err := b2.ToData()
-	require.NoError(t, err)
-	require.Equal(t, blobData2, d2)
-}
-
-// TestTxMgr_EstimateGas ensures that the tx manager will estimate
-// the gas when candidate gas limit is zero in [CraftTx].
 func TestTxMgr_EstimateGas(t *testing.T) {
 	t.Parallel()
 	h := newTestHarness(t)
@@ -741,7 +582,7 @@ func TestTxMgrOnlyOnePublicationSucceeds(t *testing.T) {
 
 	h := newTestHarness(t)
 
-	gasTipCap, gasFeeCap, _ := h.gasPricer.sample()
+	gasTipCap, gasFeeCap := h.gasPricer.sample()
 	tx := types.NewTx(&types.DynamicFeeTx{
 		GasTipCap: gasTipCap,
 		GasFeeCap: gasFeeCap,
@@ -754,7 +595,7 @@ func TestTxMgrOnlyOnePublicationSucceeds(t *testing.T) {
 		}
 
 		txHash := tx.Hash()
-		h.backend.mine(&txHash, tx.GasFeeCap(), nil)
+		h.backend.mine(&txHash, tx.GasFeeCap())
 		return nil
 	}
 	h.backend.setTxSender(sendTx)
@@ -779,7 +620,7 @@ func TestTxMgrRebroadcastsWithoutGasPriceIncrease(t *testing.T) {
 	cfg.ResubmissionTimeout.Store(int64(time.Hour))
 	h := newTestHarnessWithConfig(t, cfg)
 
-	gasTipCap, gasFeeCap, _ := h.gasPricer.sample()
+	gasTipCap, gasFeeCap := h.gasPricer.sample()
 	txToSend := types.NewTx(&types.DynamicFeeTx{
 		GasTipCap: gasTipCap,
 		GasFeeCap: gasFeeCap,
@@ -794,7 +635,7 @@ func TestTxMgrRebroadcastsWithoutGasPriceIncrease(t *testing.T) {
 		}
 		sameTxPublishAttempts++
 		if sameTxPublishAttempts >= 3 {
-			h.backend.mine(&txHash, tx.GasFeeCap(), nil)
+			h.backend.mine(&txHash, tx.GasFeeCap())
 			return nil
 		} else if sameTxPublishAttempts > 1 {
 			return txpool.ErrAlreadyKnown
@@ -819,7 +660,7 @@ func TestTxMgrConfirmsMinGasPriceAfterBumping(t *testing.T) {
 
 	h := newTestHarness(t)
 
-	gasTipCap, gasFeeCap, _ := h.gasPricer.sample()
+	gasTipCap, gasFeeCap := h.gasPricer.sample()
 	tx := types.NewTx(&types.DynamicFeeTx{
 		GasTipCap: gasTipCap,
 		GasFeeCap: gasFeeCap,
@@ -830,7 +671,7 @@ func TestTxMgrConfirmsMinGasPriceAfterBumping(t *testing.T) {
 		if h.gasPricer.shouldMine(tx.GasFeeCap()) {
 			time.AfterFunc(5*time.Second, func() {
 				txHash := tx.Hash()
-				h.backend.mine(&txHash, tx.GasFeeCap(), nil)
+				h.backend.mine(&txHash, tx.GasFeeCap())
 			})
 		}
 		return nil
@@ -855,7 +696,7 @@ func TestTxMgrRetriesUnbumpableTx(t *testing.T) {
 	h := newTestHarnessWithConfig(t, cfg)
 
 	// Make the fees unbumpable by starting with fees that will be WAY over the suggested values
-	gasTipCap, gasFeeCap, _ := h.gasPricer.feesForEpoch(100)
+	gasTipCap, gasFeeCap := h.gasPricer.feesForEpoch(100)
 	txToSend := types.NewTx(&types.DynamicFeeTx{
 		GasTipCap: gasTipCap,
 		GasFeeCap: gasFeeCap,
@@ -871,7 +712,7 @@ func TestTxMgrRetriesUnbumpableTx(t *testing.T) {
 			// delay mining to give it enough time for ~3 retries
 			time.AfterFunc(3*time.Second, func() {
 				txHash := tx.Hash()
-				h.backend.mine(&txHash, tx.GasFeeCap(), nil)
+				h.backend.mine(&txHash, tx.GasFeeCap())
 			})
 		}
 		return nil
@@ -892,7 +733,7 @@ func TestTxMgrDoesntAbortNonceTooLowAfterMiningTx(t *testing.T) {
 
 	h := newTestHarnessWithConfig(t, configWithNumConfs(2))
 
-	gasTipCap, gasFeeCap, _ := h.gasPricer.sample()
+	gasTipCap, gasFeeCap := h.gasPricer.sample()
 	tx := types.NewTx(&types.DynamicFeeTx{
 		GasTipCap: gasTipCap,
 		GasFeeCap: gasFeeCap,
@@ -909,9 +750,9 @@ func TestTxMgrDoesntAbortNonceTooLowAfterMiningTx(t *testing.T) {
 		// Accept and mine the actual txn we expect to confirm.
 		case h.gasPricer.shouldMine(tx.GasFeeCap()):
 			txHash := tx.Hash()
-			h.backend.mine(&txHash, tx.GasFeeCap(), nil)
+			h.backend.mine(&txHash, tx.GasFeeCap())
 			time.AfterFunc(5*time.Second, func() {
-				h.backend.mine(nil, nil, nil)
+				h.backend.mine(nil, nil)
 			})
 			return nil
 
@@ -941,7 +782,7 @@ func TestWaitMinedReturnsReceiptOnFirstSuccess(t *testing.T) {
 	// Create a tx and mine it immediately using the default backend.
 	tx := types.NewTx(&types.LegacyTx{})
 	txHash := tx.Hash()
-	h.backend.mine(&txHash, new(big.Int), nil)
+	h.backend.mine(&txHash, new(big.Int))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -983,7 +824,7 @@ func TestWaitMinedMultipleConfs(t *testing.T) {
 	// Create an unimined tx.
 	tx := types.NewTx(&types.LegacyTx{})
 	txHash := tx.Hash()
-	h.backend.mine(&txHash, new(big.Int), nil)
+	h.backend.mine(&txHash, new(big.Int))
 
 	receipt, err := h.mgr.waitMined(ctx, tx, NewSendState(10, time.Hour))
 	require.ErrorIs(t, err, context.DeadlineExceeded)
@@ -993,7 +834,7 @@ func TestWaitMinedMultipleConfs(t *testing.T) {
 	defer cancel()
 
 	// Mine an empty block, tx should now be confirmed.
-	h.backend.mine(nil, nil, nil)
+	h.backend.mine(nil, nil)
 	receipt, err = h.mgr.waitMined(ctx, tx, NewSendState(10, time.Hour))
 	require.Nil(t, err)
 	require.NotNil(t, receipt)
@@ -1026,10 +867,10 @@ func TestManagerErrsOnZeroConfs(t *testing.T) {
 // first call but a success on the second call. This allows us to test that the
 // inner loop of WaitMined properly handles this case.
 type failingBackend struct {
-	returnSuccessBlockNumber     bool
-	returnSuccessHeader          bool
-	returnSuccessReceipt         bool
-	baseFee, gasTip, blobBaseFee *big.Int
+	returnSuccessBlockNumber bool
+	returnSuccessHeader      bool
+	returnSuccessReceipt     bool
+	baseFee, gasTip          *big.Int
 }
 
 // BlockNumber for the failingBackend returns errRpcFailure on the first
@@ -1102,10 +943,6 @@ func (b *failingBackend) ChainID(ctx context.Context) (*big.Int, error) {
 func (b *failingBackend) Close() {
 }
 
-func (b *failingBackend) BlobBaseFee(ctx context.Context) (*big.Int, error) {
-	return b.blobBaseFee, nil
-}
-
 // TestWaitMinedReturnsReceiptAfterFailure asserts that WaitMined is able to
 // recover from failed calls to the backend. It uses the failedBackend to
 // simulate an rpc call failure, followed by the successful return of a receipt.
@@ -1120,7 +957,6 @@ func TestWaitMinedReturnsReceiptAfterFailure(t *testing.T) {
 		SafeAbortNonceTooLowCount: 3,
 	}
 	cfg.ResubmissionTimeout.Store(int64(time.Second))
-	cfg.MinBlobTxFee.Store(defaultMinBlobTxFee)
 
 	mgr := &SimpleTxManager{
 		cfg:     &cfg,
@@ -1143,14 +979,11 @@ func TestWaitMinedReturnsReceiptAfterFailure(t *testing.T) {
 	require.Equal(t, receipt.TxHash, txHash)
 }
 
-func doGasPriceIncrease(t *testing.T, txTipCap, txFeeCap, newTip, newBaseFee int64, txBlobFeeCap *int64, modMgr func(*SimpleTxManager)) (*types.Transaction, *types.Transaction, error) {
+func doGasPriceIncrease(t *testing.T, txTipCap, txFeeCap, newTip, newBaseFee int64, modMgr func(*SimpleTxManager)) (*types.Transaction, *types.Transaction, error) {
 	borkedBackend := failingBackend{
 		gasTip:              big.NewInt(newTip),
 		baseFee:             big.NewInt(newBaseFee),
 		returnSuccessHeader: true,
-	}
-	if txBlobFeeCap != nil {
-		borkedBackend.blobBaseFee = big.NewInt(1)
 	}
 
 	cfg := Config{
@@ -1164,7 +997,6 @@ func doGasPriceIncrease(t *testing.T, txTipCap, txFeeCap, newTip, newBaseFee int
 	}
 	cfg.ResubmissionTimeout.Store(int64(time.Second))
 	cfg.FeeLimitMultiplier.Store(5)
-	cfg.MinBlobTxFee.Store(defaultMinBlobTxFee)
 
 	mgr := &SimpleTxManager{
 		cfg:                 &cfg,
@@ -1179,19 +1011,10 @@ func doGasPriceIncrease(t *testing.T, txTipCap, txFeeCap, newTip, newBaseFee int
 		modMgr(mgr)
 	}
 
-	var tx *types.Transaction
-	if txBlobFeeCap != nil {
-		tx = types.NewTx(&types.BlobTx{
-			GasTipCap:  uint256.NewInt(uint64(txTipCap)),
-			GasFeeCap:  uint256.NewInt(uint64(txFeeCap)),
-			BlobFeeCap: uint256.NewInt(uint64(*txBlobFeeCap)),
-		})
-	} else {
-		tx = types.NewTx(&types.DynamicFeeTx{
-			GasTipCap: big.NewInt(txTipCap),
-			GasFeeCap: big.NewInt(txFeeCap),
-		})
-	}
+	tx := types.NewTx(&types.DynamicFeeTx{
+		GasTipCap: big.NewInt(txTipCap),
+		GasFeeCap: big.NewInt(txFeeCap),
+	})
 	newTx, err := mgr.increaseGasPrice(context.Background(), tx)
 	return tx, newTx, err
 }
@@ -1206,7 +1029,7 @@ func TestIncreaseGasPrice(t *testing.T) {
 		{
 			name: "bump at least 1",
 			run: func(t *testing.T) {
-				tx, newTx, err := doGasPriceIncrease(t, 1, 3, 1, 1, nil, nil)
+				tx, newTx, err := doGasPriceIncrease(t, 1, 3, 1, 1, nil)
 				require.True(t, newTx.GasFeeCap().Cmp(tx.GasFeeCap()) > 0, "new tx fee cap must be larger")
 				require.True(t, newTx.GasTipCap().Cmp(tx.GasTipCap()) > 0, "new tx tip must be larger")
 				require.NoError(t, err)
@@ -1215,7 +1038,7 @@ func TestIncreaseGasPrice(t *testing.T) {
 		{
 			name: "enforces min bump",
 			run: func(t *testing.T) {
-				tx, newTx, err := doGasPriceIncrease(t, 100, 1000, 101, 460, nil, nil)
+				tx, newTx, err := doGasPriceIncrease(t, 100, 1000, 101, 460, nil)
 				require.True(t, newTx.GasFeeCap().Cmp(tx.GasFeeCap()) > 0, "new tx fee cap must be larger")
 				require.True(t, newTx.GasTipCap().Cmp(tx.GasTipCap()) > 0, "new tx tip must be larger")
 				require.NoError(t, err)
@@ -1224,7 +1047,7 @@ func TestIncreaseGasPrice(t *testing.T) {
 		{
 			name: "enforces min bump on only tip increase",
 			run: func(t *testing.T) {
-				tx, newTx, err := doGasPriceIncrease(t, 100, 1000, 101, 440, nil, nil)
+				tx, newTx, err := doGasPriceIncrease(t, 100, 1000, 101, 440, nil)
 				require.True(t, newTx.GasFeeCap().Cmp(tx.GasFeeCap()) > 0, "new tx fee cap must be larger")
 				require.True(t, newTx.GasTipCap().Cmp(tx.GasTipCap()) > 0, "new tx tip must be larger")
 				require.NoError(t, err)
@@ -1233,7 +1056,7 @@ func TestIncreaseGasPrice(t *testing.T) {
 		{
 			name: "enforces min bump on only base fee increase",
 			run: func(t *testing.T) {
-				tx, newTx, err := doGasPriceIncrease(t, 100, 1000, 99, 460, nil, nil)
+				tx, newTx, err := doGasPriceIncrease(t, 100, 1000, 99, 460, nil)
 				require.True(t, newTx.GasFeeCap().Cmp(tx.GasFeeCap()) > 0, "new tx fee cap must be larger")
 				require.True(t, newTx.GasTipCap().Cmp(tx.GasTipCap()) > 0, "new tx tip must be larger")
 				require.NoError(t, err)
@@ -1242,7 +1065,7 @@ func TestIncreaseGasPrice(t *testing.T) {
 		{
 			name: "uses L1 values when larger",
 			run: func(t *testing.T) {
-				_, newTx, err := doGasPriceIncrease(t, 10, 100, 50, 200, nil, nil)
+				_, newTx, err := doGasPriceIncrease(t, 10, 100, 50, 200, nil)
 				require.Zero(t, newTx.GasFeeCap().Cmp(big.NewInt(450)), "new tx fee cap must be equal L1")
 				require.Zero(t, newTx.GasTipCap().Cmp(big.NewInt(50)), "new tx tip must be equal L1")
 				require.NoError(t, err)
@@ -1251,7 +1074,7 @@ func TestIncreaseGasPrice(t *testing.T) {
 		{
 			name: "uses L1 tip when larger and threshold FC",
 			run: func(t *testing.T) {
-				_, newTx, err := doGasPriceIncrease(t, 100, 2200, 120, 1050, nil, nil)
+				_, newTx, err := doGasPriceIncrease(t, 100, 2200, 120, 1050, nil)
 				require.Zero(t, newTx.GasTipCap().Cmp(big.NewInt(120)), "new tx tip must be equal L1")
 				require.Zero(t, newTx.GasFeeCap().Cmp(big.NewInt(2420)), "new tx fee cap must be equal to the threshold value")
 				require.NoError(t, err)
@@ -1260,7 +1083,7 @@ func TestIncreaseGasPrice(t *testing.T) {
 		{
 			name: "bumped fee above multiplier limit",
 			run: func(t *testing.T) {
-				_, _, err := doGasPriceIncrease(t, 1, 9999, 1, 1, nil, nil)
+				_, _, err := doGasPriceIncrease(t, 1, 9999, 1, 1, nil)
 				require.ErrorContains(t, err, "fee cap")
 				require.NotContains(t, err.Error(), "tip cap")
 			},
@@ -1268,7 +1091,7 @@ func TestIncreaseGasPrice(t *testing.T) {
 		{
 			name: "bumped tip above multiplier limit",
 			run: func(t *testing.T) {
-				_, _, err := doGasPriceIncrease(t, 9999, 0, 0, 9999, nil, nil)
+				_, _, err := doGasPriceIncrease(t, 9999, 0, 0, 9999, nil)
 				require.ErrorContains(t, err, "tip cap")
 				require.NotContains(t, err.Error(), "fee cap")
 			},
@@ -1276,7 +1099,7 @@ func TestIncreaseGasPrice(t *testing.T) {
 		{
 			name: "bumped fee and tip above multiplier limit",
 			run: func(t *testing.T) {
-				_, _, err := doGasPriceIncrease(t, 9999, 9999, 1, 1, nil, nil)
+				_, _, err := doGasPriceIncrease(t, 9999, 9999, 1, 1, nil)
 				require.ErrorContains(t, err, "tip cap")
 				require.ErrorContains(t, err, "fee cap")
 			},
@@ -1284,7 +1107,7 @@ func TestIncreaseGasPrice(t *testing.T) {
 		{
 			name: "uses L1 FC when larger and threshold tip",
 			run: func(t *testing.T) {
-				_, newTx, err := doGasPriceIncrease(t, 100, 2200, 100, 2000, nil, nil)
+				_, newTx, err := doGasPriceIncrease(t, 100, 2200, 100, 2000, nil)
 				require.Zero(t, newTx.GasTipCap().Cmp(big.NewInt(110)), "new tx tip must be equal the threshold value")
 				t.Log("Vals:", newTx.GasFeeCap())
 				require.Zero(t, newTx.GasFeeCap().Cmp(big.NewInt(4110)), "new tx fee cap must be equal L1")
@@ -1294,28 +1117,15 @@ func TestIncreaseGasPrice(t *testing.T) {
 		{
 			name: "supports extension through custom estimator",
 			run: func(t *testing.T) {
-				customEstimator := func(ctx context.Context, backend ETHBackend) (*big.Int, *big.Int, *big.Int, error) {
-					return big.NewInt(100), big.NewInt(3000), big.NewInt(100), nil
+				customEstimator := func(ctx context.Context, backend ETHBackend) (*big.Int, *big.Int, error) {
+					return big.NewInt(100), big.NewInt(3000), nil
 				}
-				_, newTx, err := doGasPriceIncrease(t, 70, 2000, 80, 2100, nil, func(mgr *SimpleTxManager) {
+				_, newTx, err := doGasPriceIncrease(t, 70, 2000, 80, 2100, func(mgr *SimpleTxManager) {
 					mgr.gasPriceEstimatorFn = customEstimator
 				})
 				require.NoError(t, err)
 				require.Zero(t, newTx.GasFeeCap().Cmp(big.NewInt(6100)))
 				require.Zero(t, newTx.GasTipCap().Cmp(big.NewInt(100)))
-			},
-		},
-		{
-			name: "blob tx uses dynamic blob tip cap from oracle",
-			run: func(t *testing.T) {
-				oracleBlobTipCap := big.NewInt(42)
-				blobFeeCap := int64(50)
-				_, newTx, err := doGasPriceIncrease(t, 10, 100, 1, 1, &blobFeeCap, func(mgr *SimpleTxManager) {
-					mgr.cfg.BlobTipCapDynamic.Store(true)
-					mgr.blobTipOracle = &mockBlobTipOracle{suggestedTip: oracleBlobTipCap}
-				})
-				require.NoError(t, err)
-				require.Equal(t, oracleBlobTipCap, newTx.GasTipCap(), "blob tx should use tip cap from oracle")
 			},
 		},
 	}
@@ -1329,17 +1139,15 @@ func TestIncreaseGasPrice(t *testing.T) {
 func TestIncreaseGasPriceLimits(t *testing.T) {
 	t.Run("no-threshold", func(t *testing.T) {
 		testIncreaseGasPriceLimit(t, gasPriceLimitTest{
-			expTipCap:     46,
-			expFeeCap:     354, // just below 5*100
-			expBlobFeeCap: 4 * params.GWei,
+			expTipCap: 46,
+			expFeeCap: 354, // just below 5*100
 		})
 	})
 	t.Run("with-threshold", func(t *testing.T) {
 		testIncreaseGasPriceLimit(t, gasPriceLimitTest{
-			thr:           big.NewInt(params.GWei * 10),
-			expTipCap:     1_293_535_754,
-			expFeeCap:     9_192_620_686, // just below 10 gwei
-			expBlobFeeCap: 8 * params.GWei,
+			thr:       big.NewInt(params.GWei * 10),
+			expTipCap: 1_293_535_754,
+			expFeeCap: 9_192_620_686, // just below 10 gwei
 		})
 	})
 }
@@ -1347,7 +1155,6 @@ func TestIncreaseGasPriceLimits(t *testing.T) {
 type gasPriceLimitTest struct {
 	thr                  *big.Int
 	expTipCap, expFeeCap int64
-	expBlobFeeCap        int64
 }
 
 // testIncreaseGasPriceLimit runs a gas bumping test that increases the gas price until it hits an error.
@@ -1360,7 +1167,6 @@ func testIncreaseGasPriceLimit(t *testing.T, lt gasPriceLimitTest) {
 	borkedBackend := failingBackend{
 		gasTip:              big.NewInt(borkedTip),
 		baseFee:             big.NewInt(borkedFee),
-		blobBaseFee:         big.NewInt(50),
 		returnSuccessHeader: true,
 	}
 
@@ -1379,7 +1185,6 @@ func testIncreaseGasPriceLimit(t *testing.T, lt gasPriceLimitTest) {
 	cfg.ResubmissionTimeout.Store(int64(time.Second))
 	cfg.FeeLimitMultiplier.Store(5)
 	cfg.FeeLimitThreshold.Store(lt.thr)
-	cfg.MinBlobTxFee.Store(defaultMinBlobTxFee)
 	cfg.Backend = &borkedBackend
 
 	mgr, err := NewSimpleTxManagerFromConfig("TEST", testlog.Logger(t, log.LevelCrit), &metrics.NoopTxMetrics{}, &cfg)
@@ -1406,26 +1211,6 @@ func testIncreaseGasPriceLimit(t *testing.T, lt gasPriceLimitTest) {
 	// Confirm that fees only rose until expected threshold
 	require.Equal(t, lt.expTipCap, lastGoodTx.GasTipCap().Int64())
 	require.Equal(t, lt.expFeeCap, lastGoodTx.GasFeeCap().Int64())
-
-	// Confirm blob txs also don't see runaway fee increase and that blob fee market is also capped
-	// as expected
-	blobTx := &types.BlobTx{}
-	blobTx.GasTipCap = uint256.NewInt(1)
-	blobTx.GasFeeCap = uint256.NewInt(10)
-	// set a large initial blobFeeCap to make sure blob fee cap is hit before regular fee cap
-	blobTx.BlobFeeCap = uint256.NewInt(params.GWei * 2)
-	lastGoodTx = types.NewTx(blobTx)
-	for {
-		var tmpTx *types.Transaction
-		tmpTx, err = mgr.increaseGasPrice(ctx, lastGoodTx)
-		if err != nil {
-			break
-		}
-		lastGoodTx = tmpTx
-	}
-	require.ErrorIs(t, err, ErrBlobFeeLimit)
-	// Confirm that fees only rose until expected threshold
-	require.Equal(t, lt.expBlobFeeCap, lastGoodTx.BlobGasFeeCap().Int64())
 }
 
 func TestErrStringMatch(t *testing.T) {
@@ -1466,7 +1251,7 @@ func TestNonceReset(t *testing.T) {
 				return core.ErrNonceTooLow
 			}
 			txHash := tx.Hash()
-			h.backend.mine(&txHash, tx.GasFeeCap(), nil)
+			h.backend.mine(&txHash, tx.GasFeeCap())
 			return nil
 		}
 		h.backend.setTxSender(sendTx)
@@ -1538,7 +1323,7 @@ func TestMinFees(t *testing.T) {
 			conf.MinTipCap.Store(tt.minTipCap)
 			h := newTestHarnessWithConfig(t, conf)
 
-			tip, baseFee, _, _, err := h.mgr.SuggestGasPriceCaps(context.Background())
+			tip, baseFee, err := h.mgr.SuggestGasPriceCaps(context.Background())
 			require.NoError(err)
 
 			if tt.expectMinBaseFee {
@@ -1585,7 +1370,7 @@ func TestMaxFees(t *testing.T) {
 			conf.MaxTipCap.Store(tt.maxTipCap)
 			h := newTestHarnessWithConfig(t, conf)
 
-			tip, baseFee, _, _, err := h.mgr.SuggestGasPriceCaps(context.Background())
+			tip, baseFee, err := h.mgr.SuggestGasPriceCaps(context.Background())
 			if tt.expectMaxBaseFee {
 				require.Equal(err, fmt.Errorf("baseFee is too high: %v, cap:%v", h.gasPricer.baseBaseFee, tt.maxBaseFee), "expect baseFee is too high")
 			}
@@ -1625,7 +1410,7 @@ func TestClose(t *testing.T) {
 			}
 			if called%retries == 0 {
 				txHash := tx.Hash()
-				h.backend.mine(&txHash, tx.GasFeeCap(), big.NewInt(1))
+				h.backend.mine(&txHash, tx.GasFeeCap())
 			} else {
 				time.Sleep(10 * time.Millisecond)
 				err = errRpcFailure
@@ -1689,7 +1474,7 @@ func TestCloseWaitingForConfirmation(t *testing.T) {
 
 		sendTx := func(ctx context.Context, tx *types.Transaction) error {
 			txHash := tx.Hash()
-			h.backend.mine(&txHash, tx.GasFeeCap(), big.NewInt(1))
+			h.backend.mine(&txHash, tx.GasFeeCap())
 			close(sendDone)
 			return nil
 		}
@@ -1707,7 +1492,7 @@ func TestCloseWaitingForConfirmation(t *testing.T) {
 		// by forcing this to happen after close, we are able to observe a closing manager waiting for confirmation
 		go func() {
 			<-closeDone
-			h.backend.mine(nil, nil, big.NewInt(1))
+			h.backend.mine(nil, nil)
 		}()
 
 		ctx := context.Background()
@@ -1729,7 +1514,7 @@ func TestTxMgrCustomPublishError(t *testing.T) {
 
 		sendTx := func(ctx context.Context, tx *types.Transaction) error {
 			txHash := tx.Hash()
-			h.backend.mine(&txHash, tx.GasFeeCap(), nil)
+			h.backend.mine(&txHash, tx.GasFeeCap())
 			return customErr
 		}
 		h.backend.setTxSender(sendTx)
@@ -1752,7 +1537,7 @@ func TestTxMgrRetryOnError(t *testing.T) {
 
 		sendTx := func(ctx context.Context, tx *types.Transaction) error {
 			txHash := tx.Hash()
-			h.backend.mine(&txHash, tx.GasFeeCap(), nil)
+			h.backend.mine(&txHash, tx.GasFeeCap())
 			sendAttempts++
 			return sendErr
 		}
@@ -1765,42 +1550,6 @@ func TestTxMgrRetryOnError(t *testing.T) {
 		require.Nil(t, receipt)
 		require.Equal(t, cfg.MaxRetries+1, sendAttempts)
 	})
-}
-
-func TestMakeSidecar(t *testing.T) {
-	var blob eth.Blob
-	_, err := rand.Read(blob[:])
-	require.NoError(t, err)
-	// get the field-elements into a valid range
-	for i := 0; i < 4096; i++ {
-		blob[32*i] &= 0b0011_1111
-	}
-
-	// Pre Fusaka, blob proof sidecar is Version0
-	sidecar, hashes, err := MakeSidecar([]*eth.Blob{&blob}, false)
-	require.NoError(t, err)
-	require.Equal(t, len(hashes), 1)
-	require.Equal(t, len(sidecar.Blobs), len(hashes))
-	require.Equal(t, len(sidecar.Proofs), len(hashes))
-	require.Equal(t, len(sidecar.Commitments), len(hashes))
-
-	for i, commit := range sidecar.Commitments {
-		require.NoError(t, eth.VerifyBlobProof((*eth.Blob)(&sidecar.Blobs[i]), commit, sidecar.Proofs[i]), "proof must be valid")
-		require.Equal(t, hashes[i], eth.KZGToVersionedHash(commit))
-	}
-
-	// Post Fusaka, blob proof sidecar is Version1
-	sidecar, hashes, err = MakeSidecar([]*eth.Blob{&blob}, true)
-	require.NoError(t, err)
-	require.Equal(t, len(hashes), 1)
-	require.Equal(t, len(sidecar.Blobs), len(hashes))
-	require.Equal(t, len(sidecar.Proofs), len(hashes)*kzg4844.CellProofsPerBlob)
-	require.Equal(t, len(sidecar.Commitments), len(hashes))
-
-	require.NoError(t, kzg4844.VerifyCellProofs(sidecar.Blobs, sidecar.Commitments, sidecar.Proofs), "cell proof must be valid")
-	for i, commit := range sidecar.Commitments {
-		require.Equal(t, hashes[i], eth.KZGToVersionedHash(commit))
-	}
 }
 
 func TestSendAsyncUnbufferedChan(t *testing.T) {
@@ -1871,7 +1620,7 @@ func TestIncreaseGasPriceSigningErrorWithSend(t *testing.T) {
 			return txpool.ErrAlreadyKnown
 		} else if tx.Hash() == signedHash {
 			txHash := tx.Hash()
-			h.backend.mine(&txHash, tx.GasFeeCap(), nil)
+			h.backend.mine(&txHash, tx.GasFeeCap())
 			return nil
 		} else {
 			return signingError
@@ -1888,64 +1637,4 @@ func TestIncreaseGasPriceSigningErrorWithSend(t *testing.T) {
 	receipt, err := h.mgr.sendTx(ctx, tx)
 	require.Nil(t, err)
 	require.NotNil(t, receipt)
-}
-
-// TestTxMgr_BlobTipCapDynamic tests that blob transactions respect the BlobTipCapDynamic config:
-// - When false (default): blob txs use gasTipCap (same as regular txs)
-// - When true: blob txs use the oracle-suggested blobTipCap
-func TestTxMgr_BlobTipCapDynamic(t *testing.T) {
-	t.Parallel()
-
-	// Create a custom gas price estimator
-	gasTipCapVal := big.NewInt(100)
-
-	customEstimator := func(ctx context.Context, backend ETHBackend) (*big.Int, *big.Int, *big.Int, error) {
-		return gasTipCapVal, big.NewInt(7), big.NewInt(50), nil
-	}
-
-	t.Run("BlobTipCapDynamic=false uses gasTipCap", func(t *testing.T) {
-		cfg := configWithNumConfs(1)
-		cfg.GasPriceEstimatorFn = customEstimator
-		cfg.BlobTipCapDynamic.Store(false)
-
-		h := newTestHarnessWithConfig(t, cfg)
-
-		// Use a different value for oracle tip to verify it's NOT used
-		oracleBlobTipCap := big.NewInt(999)
-		// Inject the mock oracle - it should NOT be used when BlobTipCapDynamic=false
-		h.mgr.blobTipOracle = &mockBlobTipOracle{suggestedTip: oracleBlobTipCap}
-
-		candidate := h.createBlobTxCandidate()
-
-		tx, err := h.mgr.craftTx(context.Background(), candidate)
-		require.NoError(t, err)
-		require.NotNil(t, tx)
-		require.Equal(t, byte(types.BlobTxType), tx.Type())
-
-		// When BlobTipCapDynamic is false, blob tx should use gasTipCap (not oracle)
-		require.Equal(t, gasTipCapVal, tx.GasTipCap(), "blob tx should use gasTipCap when BlobTipCapDynamic=false")
-		require.NotEqual(t, oracleBlobTipCap, tx.GasTipCap(), "blob tx should NOT use oracle tip when BlobTipCapDynamic=false")
-	})
-
-	t.Run("BlobTipCapDynamic=true uses oracle blobTipCap", func(t *testing.T) {
-		cfg := configWithNumConfs(1)
-		cfg.GasPriceEstimatorFn = customEstimator
-		cfg.BlobTipCapDynamic.Store(true)
-
-		h := newTestHarnessWithConfig(t, cfg)
-
-		oracleBlobTipCap := big.NewInt(42)
-		// Inject the mock oracle directly into the manager
-		h.mgr.blobTipOracle = &mockBlobTipOracle{suggestedTip: oracleBlobTipCap}
-
-		candidate := h.createBlobTxCandidate()
-
-		tx, err := h.mgr.craftTx(context.Background(), candidate)
-		require.NoError(t, err)
-		require.NotNil(t, tx)
-		require.Equal(t, byte(types.BlobTxType), tx.Type())
-
-		// When BlobTipCapDynamic is true, blob tx should use blobTipCap from oracle
-		require.Equal(t, oracleBlobTipCap, tx.GasTipCap(), "blob tx should use blobTipCap from oracle when BlobTipCapDynamic=true")
-	})
 }

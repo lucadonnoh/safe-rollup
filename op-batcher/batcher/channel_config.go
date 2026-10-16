@@ -34,8 +34,6 @@ type ChannelConfig struct {
 	MaxBlocksPerSpanBatch int
 
 	// Target number of frames to create per channel.
-	// For blob transactions, this controls the number of blobs to target adding
-	// to each blob tx.
 	TargetNumFrames int
 
 	// CompressorConfig contains the configuration for creating new compressors.
@@ -45,16 +43,6 @@ type ChannelConfig struct {
 
 	// BatchType indicates whether the channel uses SingularBatch or SpanBatch.
 	BatchType uint
-
-	// UseBlobs indicates that this channel should be sent as a multi-blob
-	// transaction with one blob per frame.
-	UseBlobs bool
-}
-
-// ChannelConfig returns a copy of the receiver.
-// This allows the receiver to be a static ChannelConfigProvider of itself.
-func (cc ChannelConfig) ChannelConfig(isThrottling bool, isAmsterdam bool) ChannelConfig {
-	return cc
 }
 
 // InitCompressorConfig (re)initializes the channel configuration's compressor
@@ -90,13 +78,6 @@ func (cc *ChannelConfig) ReinitCompressorConfig() {
 		cc.CompressorConfig.Kind,
 		cc.CompressorConfig.CompressionAlgo,
 	)
-}
-
-func (cc *ChannelConfig) MaxFramesPerTx() int {
-	if !cc.UseBlobs {
-		return 1
-	}
-	return cc.TargetNumFrames
 }
 
 // Check validates the [ChannelConfig] parameters.

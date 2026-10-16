@@ -5,7 +5,6 @@ pragma solidity 0.8.15;
 import { Test } from "test/setup/Test.sol";
 
 // Scripts
-import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
 
 // Interfaces
 import { IWETH98 } from "interfaces/universal/IWETH98.sol";
@@ -23,11 +22,7 @@ abstract contract WETH98_TestInit is Test {
     address bob;
 
     function setUp() public {
-        weth = IWETH98(
-            DeployUtils.create1({
-                _name: "WETH98", _args: DeployUtils.encodeConstructor(abi.encodeCall(IWETH98.__constructor__, ()))
-            })
-        );
+        weth = IWETH98(payable(vm.deployCode("WETH98.sol:WETH98")));
         alice = makeAddr("alice");
         bob = makeAddr("bob");
         deal(alice, 1 ether);

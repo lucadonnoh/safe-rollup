@@ -4,9 +4,7 @@ pragma solidity 0.8.15;
 // Testing
 import { Test } from "test/setup/Test.sol";
 import { StdCheatsSafe } from "forge-std/StdCheats.sol";
-
-// Scripts
-import { Config } from "scripts/libraries/Config.sol";
+import { VmSafe } from "forge-std/Vm.sol";
 
 // Libraries
 import { SafeCall } from "src/libraries/SafeCall.sol";
@@ -114,6 +112,13 @@ contract SafeCall_Call_Test is SafeCall_TestInit {
 /// @title SafeCall_CallWithMinGas_Test
 /// @notice Tests the `callWithMinGas` function of the `SafeCall` contract.
 contract SafeCall_CallWithMinGas_Test is SafeCall_TestInit {
+    /// @notice Coverage and non-default profiles compile without the optimizer, which changes gas.
+    function isUnoptimized() internal view returns (bool) {
+        if (vm.isContext(VmSafe.ForgeContext.Coverage)) return true;
+        bytes32 profile = keccak256(bytes(vm.envOr("FOUNDRY_PROFILE", string("default"))));
+        return profile != keccak256("default") && profile != keccak256("ci");
+    }
+
     /// @notice Tests that `callWithMinGas` succeeds with enough gas.
     function testFuzz_callWithMinGas_hasEnough_succeeds(
         address from,
@@ -167,7 +172,7 @@ contract SafeCall_CallWithMinGas_Test is SafeCall_TestInit {
             // Because forge coverage always runs with the optimizer disabled, if forge coverage is
             // run before testing this with forge test or forge snapshot, forge clean should be run
             // first so that it recompiles the contracts using the foundry.toml optimizer settings.
-            if (Config.isUnoptimized()) {
+            if (isUnoptimized()) {
                 // 66_290 is the exact amount of gas required with the optimizer disabled.
                 expected = 66_290;
             } else {
@@ -204,7 +209,7 @@ contract SafeCall_CallWithMinGas_Test is SafeCall_TestInit {
             // Because forge coverage always runs with the optimizer disabled, if forge coverage is
             // run before testing this with forge test or forge snapshot, forge clean should be run
             // first so that it recompiles the contracts using the foundry.toml optimizer settings.
-            if (Config.isUnoptimized()) {
+            if (isUnoptimized()) {
                 // 15_278_989 is the exact amount of gas required with the optimizer disabled.
                 expected = 15_278_989;
             } else {

@@ -50,7 +50,7 @@ func buildELSyncTipChain(t *testing.T) (*rollup.Config, eth.L2BlockRef, eth.L2Bl
 			SystemConfig: eth.SystemConfig{
 				BatcherAddr: common.Address{42},
 				Overhead:    [32]byte{123},
-				Scalar:      [32]byte{42},
+				Scalar:      eth.EncodeScalar(eth.EcotoneScalars{BaseFeeScalar: 42}),
 				GasLimit:    20_000_000,
 			},
 		},
@@ -92,7 +92,7 @@ func buildELSyncTipChain(t *testing.T) (*rollup.Config, eth.L2BlockRef, eth.L2Bl
 		InfoRoot:        testutils.RandomHash(rng),
 		InfoGasUsed:     rng.Uint64(),
 	}
-	l1Bytes, err := derive.L1InfoDepositBytes(cfg, params.SepoliaChainConfig, cfg.Genesis.SystemConfig, refA3.SequenceNumber, aL1Info, refA3.Time)
+	l1Bytes, err := derive.L1InfoDepositBytes(params.SepoliaChainConfig, cfg.Genesis.SystemConfig, refA3.SequenceNumber, aL1Info)
 	require.NoError(t, err)
 	payload := &eth.ExecutionPayloadEnvelope{ExecutionPayload: &eth.ExecutionPayload{
 		ParentHash:   refA3.ParentHash,
@@ -148,8 +148,7 @@ func TestInsertUnsafePayload_ELSync_offsetDerived(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mockEngine := &testutils.MockEngine{}
 			tt.stub(mockEngine)
-			ec := NewEngineController(context.Background(), mockEngine, testlog.Logger(t, 0), metrics.NoopMetrics, cfg,
-				&sync.Config{SyncMode: sync.ELSync, OffsetELSafe: tt.offset}, &testutils.MockL1Source{}, discardEmitter{}, nil)
+			ec := NewEngineController(context.Background(), mockEngine, testlog.Logger(t, 0), metrics.NoopMetrics, cfg, &sync.Config{SyncMode: sync.ELSync, OffsetELSafe: tt.offset}, &testutils.MockL1Source{}, discardEmitter{})
 
 			err := ec.InsertUnsafePayload(context.Background(), payload, refA3)
 			require.NoError(t, err)
@@ -169,8 +168,7 @@ func TestInsertUnsafePayload_ELSync_skipsWhenFinalized(t *testing.T) {
 	// No NewPayload or ForkchoiceUpdate expectation: the mock fails the test on either call.
 	mockEngine.ExpectL2BlockRefByLabel(eth.Finalized, refA1, nil)
 
-	ec := NewEngineController(context.Background(), mockEngine, testlog.Logger(t, 0), metrics.NoopMetrics, cfg,
-		&sync.Config{SyncMode: sync.ELSync}, &testutils.MockL1Source{}, discardEmitter{}, nil)
+	ec := NewEngineController(context.Background(), mockEngine, testlog.Logger(t, 0), metrics.NoopMetrics, cfg, &sync.Config{SyncMode: sync.ELSync}, &testutils.MockL1Source{}, discardEmitter{})
 	ec.SetUnsafeHead(refA2)
 
 	require.NoError(t, ec.InsertUnsafePayload(context.Background(), payload, refA3))

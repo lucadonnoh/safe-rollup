@@ -197,9 +197,8 @@ func TestSequencerInbox_WakeCoalescing(t *testing.T) {
 // fire the wake channel, so a parked run-loop re-plans its schedule promptly.
 func TestSequencerWake_StartStop(t *testing.T) {
 	logger := testlog.Logger(t, log.LevelError)
-	seq, deps := createSequencer(logger)
+	seq, _ := createSequencer(logger)
 	seq.AttachEmitter(&testutils.MockEmitter{})
-	deps.conductor.leader = true
 
 	require.NoError(t, seq.Init(context.Background(), false))
 
@@ -223,7 +222,7 @@ func TestSequencerWake_StartStop(t *testing.T) {
 
 // TestSequencerInbox_OnEventNonBlocking checks that event ingestion does not
 // take the sequencer action lock: the event loop must never stall behind a
-// long-running sequencer action (attribute preparation, conductor commit, etc).
+// long-running sequencer action (attribute preparation, sealing, etc).
 func TestSequencerInbox_OnEventNonBlocking(t *testing.T) {
 	logger := testlog.Logger(t, log.LevelError)
 	seq, _ := createSequencer(logger)
@@ -259,7 +258,6 @@ func newRunLoopFixture(t *testing.T) *runLoopFixture {
 	logger := testlog.Logger(t, log.LevelError)
 	seq, deps := createSequencer(logger)
 	seq.AttachEmitter(&testutils.MockEmitter{})
-	deps.conductor.leader = true
 
 	// Head far enough in the past that build and seal deadlines are due immediately.
 	head := eth.L2BlockRef{

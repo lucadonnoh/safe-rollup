@@ -2,7 +2,6 @@ package attributes
 
 import (
 	"context"
-	"errors"
 	"math/big"
 	"math/rand" // nosemgrep
 	"testing"
@@ -82,32 +81,30 @@ func TestAttributesHandler(t *testing.T) {
 		},
 		BlockTime:     1,
 		SeqWindowSize: 2,
-		RegolithTime:  new(uint64),
-		CanyonTime:    new(uint64),
-		EcotoneTime:   new(uint64),
 	}
 
 	emptyWithdrawals := make(types.Withdrawals, 0)
 
-	a1L1Info, err := derive.L1InfoDepositBytes(cfg, params.MergedTestChainConfig, cfg.Genesis.SystemConfig, 1, aL1Info, refA0.Time+cfg.BlockTime)
+	a1L1Info, err := derive.L1InfoDepositBytes(params.MergedTestChainConfig, cfg.Genesis.SystemConfig, 1, aL1Info)
 	require.NoError(t, err)
 	parentBeaconBlockRoot := testutils.RandomHash(rng)
 	payloadA1 := &eth.ExecutionPayloadEnvelope{ExecutionPayload: &eth.ExecutionPayload{
-		ParentHash:    refA0.Hash,
-		FeeRecipient:  common.Address{},
-		StateRoot:     eth.Bytes32{},
-		ReceiptsRoot:  eth.Bytes32{},
-		LogsBloom:     eth.Bytes256{},
-		PrevRandao:    eth.Bytes32{},
-		BlockNumber:   eth.Uint64Quantity(refA0.Number + 1),
-		GasLimit:      gasLimit,
-		GasUsed:       0,
-		Timestamp:     eth.Uint64Quantity(refA0.Time + cfg.BlockTime),
-		ExtraData:     nil,
-		BaseFeePerGas: eth.Uint256Quantity(*uint256.NewInt(7)),
-		BlockHash:     common.Hash{},
-		Transactions:  []eth.Data{a1L1Info},
-		Withdrawals:   &emptyWithdrawals,
+		ParentHash:      refA0.Hash,
+		FeeRecipient:    common.Address{},
+		StateRoot:       eth.Bytes32{},
+		ReceiptsRoot:    eth.Bytes32{},
+		LogsBloom:       eth.Bytes256{},
+		PrevRandao:      eth.Bytes32{},
+		BlockNumber:     eth.Uint64Quantity(refA0.Number + 1),
+		GasLimit:        gasLimit,
+		GasUsed:         0,
+		Timestamp:       eth.Uint64Quantity(refA0.Time + cfg.BlockTime),
+		ExtraData:       nil,
+		BaseFeePerGas:   eth.Uint256Quantity(*uint256.NewInt(7)),
+		BlockHash:       common.Hash{},
+		Transactions:    []eth.Data{a1L1Info},
+		Withdrawals:     &emptyWithdrawals,
+		WithdrawalsRoot: &types.EmptyWithdrawalsHash,
 	}, ParentBeaconBlockRoot: &parentBeaconBlockRoot}
 	// fix up the block-hash
 	payloadA1.ExecutionPayload.BlockHash, _ = payloadA1.CheckBlockHash()
@@ -131,21 +128,22 @@ func TestAttributesHandler(t *testing.T) {
 	require.NoError(t, err)
 
 	payloadA1Alt := &eth.ExecutionPayloadEnvelope{ExecutionPayload: &eth.ExecutionPayload{
-		ParentHash:    refA0.Hash,
-		FeeRecipient:  common.Address{0xde, 0xea}, // change of the alternative payload
-		StateRoot:     eth.Bytes32{},
-		ReceiptsRoot:  eth.Bytes32{},
-		LogsBloom:     eth.Bytes256{},
-		PrevRandao:    eth.Bytes32{},
-		BlockNumber:   eth.Uint64Quantity(refA0.Number + 1),
-		GasLimit:      gasLimit,
-		GasUsed:       0,
-		Timestamp:     eth.Uint64Quantity(refA0.Time + cfg.BlockTime),
-		ExtraData:     nil,
-		BaseFeePerGas: eth.Uint256Quantity(*uint256.NewInt(7)),
-		BlockHash:     common.Hash{},
-		Transactions:  []eth.Data{a1L1Info},
-		Withdrawals:   &emptyWithdrawals,
+		ParentHash:      refA0.Hash,
+		FeeRecipient:    common.Address{0xde, 0xea}, // change of the alternative payload
+		StateRoot:       eth.Bytes32{},
+		ReceiptsRoot:    eth.Bytes32{},
+		LogsBloom:       eth.Bytes256{},
+		PrevRandao:      eth.Bytes32{},
+		BlockNumber:     eth.Uint64Quantity(refA0.Number + 1),
+		GasLimit:        gasLimit,
+		GasUsed:         0,
+		Timestamp:       eth.Uint64Quantity(refA0.Time + cfg.BlockTime),
+		ExtraData:       nil,
+		BaseFeePerGas:   eth.Uint256Quantity(*uint256.NewInt(7)),
+		BlockHash:       common.Hash{},
+		Transactions:    []eth.Data{a1L1Info},
+		Withdrawals:     &emptyWithdrawals,
+		WithdrawalsRoot: &types.EmptyWithdrawalsHash,
 	}, ParentBeaconBlockRoot: &parentBeaconBlockRoot}
 	// fix up the block-hash
 	payloadA1Alt.ExecutionPayload.BlockHash, _ = payloadA1Alt.CheckBlockHash()
@@ -311,9 +309,6 @@ func TestAttributesHandler(t *testing.T) {
 
 				// Call during consolidation.
 				l2.ExpectPayloadByNumber(refA1.Number, payloadA1, nil)
-				// Not denied, so consolidation may promote it.
-				engDeriver.On("IsDenied", uint64(payloadA1.ExecutionPayload.BlockNumber), payloadA1.ExecutionPayload.BlockHash).Return(false, nil).Once()
-
 				// AttributesHandler will call EngDeriver methods for updating pending safe and local safe
 				engDeriver.On("TryUpdatePendingSafe", ah.ctx, refA1, concluding, refB).Return()
 				engDeriver.On("TryUpdateLocalSafe", ah.ctx, refA1, concluding, refB).Return()
@@ -342,81 +337,6 @@ func TestAttributesHandler(t *testing.T) {
 			t.Run("is not last span", func(t *testing.T) {
 				fn(t, false)
 			})
-		})
-		t.Run("consolidation passes but block denied", func(t *testing.T) {
-			// Matching attributes but the block is denied: must force the build
-			// path, not promote.
-			logger := testlog.Logger(t, log.LevelInfo)
-			l2 := &testutils.MockL2Client{}
-			emitter := &testutils.MockEmitter{}
-			engDeriver := &MockEngineController{}
-			ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver)
-			ah.AttachEmitter(emitter)
-
-			attr := &derive.AttributesWithParent{
-				Attributes:  attrA1.Attributes, // attributes match block A1
-				Parent:      attrA1.Parent,
-				Concluding:  true,
-				DerivedFrom: refB,
-			}
-			emitter.ExpectOnce(derive.ConfirmReceivedAttributesEvent{})
-			engDeriver.On("RequestPendingSafeUpdate", context.Background()).Once()
-			ah.OnEvent(context.Background(), derive.DerivedAttributesEvent{Attributes: attr})
-			engDeriver.AssertExpectations(t)
-			emitter.AssertExpectations(t)
-			require.NotNil(t, ah.attributes, "queued up derived attributes")
-
-			// Call during consolidation: attributes match, but the block is denied.
-			l2.ExpectPayloadByNumber(refA1.Number, payloadA1, nil)
-			engDeriver.On("IsDenied", uint64(payloadA1.ExecutionPayload.BlockNumber), payloadA1.ExecutionPayload.BlockHash).Return(true, nil).Once()
-			// Denied block forces a reorg via the build path rather than promotion.
-			emitter.ExpectOnce(engine.BuildStartEvent{Attributes: attr})
-			ah.OnEvent(context.Background(), engine.PendingSafeUpdateEvent{
-				PendingSafe: refA0,
-				Unsafe:      refA1,
-			})
-			engDeriver.AssertExpectations(t)
-			l2.AssertExpectations(t)
-			emitter.AssertExpectations(t)
-			require.True(t, ah.sentAttributes, "attributes were sent to the build path")
-			require.NotNil(t, ah.attributes, "attributes stay queued until the replacement is processed")
-		})
-		t.Run("deny-list check error stalls without promoting", func(t *testing.T) {
-			// Fail closed: if the deny-list can't be checked we must neither promote
-			// nor reorg; stall and retry.
-			logger := testlog.Logger(t, log.LevelInfo)
-			l2 := &testutils.MockL2Client{}
-			emitter := &testutils.MockEmitter{}
-			engDeriver := &MockEngineController{}
-			ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver)
-			ah.AttachEmitter(emitter)
-
-			attr := &derive.AttributesWithParent{
-				Attributes:  attrA1.Attributes, // attributes match block A1
-				Parent:      attrA1.Parent,
-				Concluding:  true,
-				DerivedFrom: refB,
-			}
-			emitter.ExpectOnce(derive.ConfirmReceivedAttributesEvent{})
-			engDeriver.On("RequestPendingSafeUpdate", context.Background()).Once()
-			ah.OnEvent(context.Background(), derive.DerivedAttributesEvent{Attributes: attr})
-			engDeriver.AssertExpectations(t)
-			emitter.AssertExpectations(t)
-			require.NotNil(t, ah.attributes, "queued up derived attributes")
-
-			// Attributes match, but the deny-list check fails.
-			l2.ExpectPayloadByNumber(refA1.Number, payloadA1, nil)
-			engDeriver.On("IsDenied", uint64(payloadA1.ExecutionPayload.BlockNumber), payloadA1.ExecutionPayload.BlockHash).Return(false, errors.New("authority unavailable")).Once()
-			// No TryUpdate* and no BuildStartEvent: just a temporary error to retry.
-			emitter.ExpectOnceType("EngineTemporaryErrorEvent")
-			ah.OnEvent(context.Background(), engine.PendingSafeUpdateEvent{
-				PendingSafe: refA0,
-				Unsafe:      refA1,
-			})
-			engDeriver.AssertExpectations(t)
-			l2.AssertExpectations(t)
-			emitter.AssertExpectations(t)
-			require.NotNil(t, ah.attributes, "attributes stay queued so consolidation retries")
 		})
 		t.Run("not found during EL sync stalls without reset", func(t *testing.T) {
 			logger := testlog.Logger(t, log.LevelInfo)

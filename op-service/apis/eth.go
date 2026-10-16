@@ -12,7 +12,6 @@ import (
 
 	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
 )
 
 type ChainID interface {
@@ -92,29 +91,6 @@ type ReceiptFetcher interface {
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*optypes.Receipt, error)
 }
 
-type ExecutionWitness interface {
-	// PayloadExecutionWitness generates a block from a payload and returns execution witness data.
-	PayloadExecutionWitness(ctx context.Context, parentHash common.Hash, payloadAttributes eth.PayloadAttributes) (*eth.ExecutionWitness, error)
-}
-
-type EthProof interface {
-	// GetProof returns an account proof result, with any optional requested storage proofs.
-	// The retrieval does sanity-check that storage proofs for the expected keys are present in the response,
-	// but does not verify the result. Call accountResult.Verify(stateRoot) to verify the result.
-	GetProof(ctx context.Context, address common.Address, storage []common.Hash, blockTag string) (*eth.AccountResult, error)
-}
-
-type EthStorage interface {
-	// GetStorageAt returns the storage value at the given address and storage slot, **without verifying the correctness of the result**.
-	// This should only ever be used as alternative to GetProof when the user opts in.
-	// E.g. Erigon L1 node users may have to use this, since Erigon does not support eth_getProof, see https://github.com/ledgerwatch/erigon/issues/1349
-	GetStorageAt(ctx context.Context, address common.Address, storageSlot common.Hash, blockTag string) (common.Hash, error)
-
-	// ReadStorageAt is a convenience method to read a single storage value at the given slot in the given account.
-	// The storage slot value is verified against the state-root of the given block if we do not trust the RPC provider, or directly retrieved without proof if we do trust the RPC.
-	ReadStorageAt(ctx context.Context, address common.Address, storageSlot common.Hash, blockHash common.Hash) (common.Hash, error)
-}
-
 type EthBlockRef interface {
 	// BlockRefByLabel returns the [eth.BlockRef] for the given block label.
 	// Notice, we cannot cache a block reference by label because labels are not guaranteed to be unique.
@@ -161,14 +137,6 @@ type EthBalance interface {
 	BalanceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (*big.Int, error)
 }
 
-type EthCode interface {
-	CodeAtHash(ctx context.Context, account common.Address, blockHash common.Hash) ([]byte, error)
-}
-
-type EthMultiCaller interface {
-	NewMultiCaller(batchSize int) *batching.MultiCaller
-}
-
 type RPCCaller interface {
 	RPC() client.RPC
 }
@@ -178,17 +146,12 @@ type EthClient interface {
 	EthBlockInfo
 	EthHeader
 	ReceiptFetcher
-	ExecutionWitness
-	EthProof
-	EthStorage
 	EthBlockRef
 	Gas
 	EthCall
 	TransactionSender
 	EthNonce
 	EthBalance
-	EthCode
-	EthMultiCaller
 	RPCCaller
 	Close()
 }

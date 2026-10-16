@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-service/apis"
@@ -21,9 +19,8 @@ import (
 type L2ClientConfig struct {
 	EthClientConfig
 
-	L2BlockRefsCacheSize         int
-	L1ConfigsCacheSize           int
-	FetchWithdrawalRootFromState bool
+	L2BlockRefsCacheSize int
+	L1ConfigsCacheSize   int
 
 	RollupCfg *rollup.Config
 }
@@ -79,8 +76,6 @@ type L2Client struct {
 	// cache SystemConfig by L2 hash
 	// common.Hash -> eth.SystemConfig
 	systemConfigsCache *caching.LRUCache[common.Hash, eth.SystemConfig]
-
-	fetchWithdrawalRootFromState bool
 }
 
 var _ apis.L2EthClient = (*L2Client)(nil)
@@ -95,11 +90,10 @@ func NewL2Client(client client.RPC, log log.Logger, metrics caching.Metrics, con
 	}
 
 	return &L2Client{
-		EthClient:                    ethClient,
-		rollupCfg:                    config.RollupCfg,
-		l2BlockRefsCache:             caching.NewLRUCache[common.Hash, eth.L2BlockRef](metrics, "blockrefs", config.L2BlockRefsCacheSize),
-		systemConfigsCache:           caching.NewLRUCache[common.Hash, eth.SystemConfig](metrics, "systemconfigs", config.L1ConfigsCacheSize),
-		fetchWithdrawalRootFromState: config.FetchWithdrawalRootFromState,
+		EthClient:          ethClient,
+		rollupCfg:          config.RollupCfg,
+		l2BlockRefsCache:   caching.NewLRUCache[common.Hash, eth.L2BlockRef](metrics, "blockrefs", config.L2BlockRefsCacheSize),
+		systemConfigsCache: caching.NewLRUCache[common.Hash, eth.SystemConfig](metrics, "systemconfigs", config.L1ConfigsCacheSize),
 	}, nil
 }
 
@@ -171,57 +165,4 @@ func (s *L2Client) SystemConfigByL2Hash(ctx context.Context, hash common.Hash) (
 	}
 	s.systemConfigsCache.Add(hash, cfg)
 	return cfg, nil
-}
-
-func (s *L2Client) OutputV0AtBlockNumber(ctx context.Context, blockNum uint64) (*eth.OutputV0, error) {
-	head, err := s.InfoByNumber(ctx, blockNum)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get L2 block by hash: %w", err)
-	}
-	return s.outputV0(ctx, head)
-}
-
-func (s *L2Client) OutputV0AtBlock(ctx context.Context, blockHash common.Hash) (*eth.OutputV0, error) {
-	head, err := s.InfoByHash(ctx, blockHash)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get L2 block by hash: %w", err)
-	}
-	return s.outputV0(ctx, head)
-}
-
-func (s *L2Client) outputV0(ctx context.Context, block eth.BlockInfo) (*eth.OutputV0, error) {
-	if block == nil {
-		return nil, ethereum.NotFound
-	}
-
-	blockHash := block.Hash()
-	var messagePasserStorageRoot eth.Bytes32
-	if s.rollupCfg.IsIsthmus(block.Time()) && !s.fetchWithdrawalRootFromState {
-		s.log.Debug("Retrieving withdrawal root from block header")
-		// If Isthmus hard fork has activated, we can get the withdrawal root directly from the header
-		// instead of having to compute it from the contract storage trie.
-		messagePasserStorageRoot = eth.Bytes32(*block.WithdrawalsRoot())
-
-	} else {
-		s.log.Debug("Bypassing block header, retrieving withdrawal root from state")
-		proof, err := s.GetProof(ctx, predeploys.L2ToL1MessagePasserAddr, []common.Hash{}, blockHash.String())
-		if err != nil {
-			return nil, fmt.Errorf("failed to get contract proof at block %s: %w", blockHash, err)
-		}
-		if proof == nil {
-			return nil, fmt.Errorf("proof %w", ethereum.NotFound)
-		}
-		// make sure that the proof (including storage hash) that we retrieved is correct by verifying it against the state-root
-		if err := proof.Verify(block.Root()); err != nil {
-			return nil, fmt.Errorf("invalid withdrawal root hash, state root was %s: %w", block.Root(), err)
-		}
-		messagePasserStorageRoot = eth.Bytes32(proof.StorageHash)
-	}
-
-	stateRoot := eth.Bytes32(block.Root())
-	return &eth.OutputV0{
-		StateRoot:                stateRoot,
-		MessagePasserStorageRoot: messagePasserStorageRoot,
-		BlockHash:                blockHash,
-	}, nil
 }

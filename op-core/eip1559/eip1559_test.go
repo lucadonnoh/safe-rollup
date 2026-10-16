@@ -2,6 +2,8 @@ package eip1559
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidateHolocene1559Params(t *testing.T) {
@@ -48,117 +50,16 @@ func TestValidateHolocene1559Params(t *testing.T) {
 	}
 }
 
-type forkChecker struct {
-	holocene bool
-	jovian   bool
-}
+func TestValidateJovianExtraData(t *testing.T) {
+	require.NoError(t, ValidateJovianExtraData(EncodeJovianExtraData(250, 6, 7)))
+	require.EqualError(t, ValidateJovianExtraData(make([]byte, 9)), "Jovian extraData should be 17 bytes, got 9")
+	bad := EncodeJovianExtraData(250, 6, 7)
+	bad[0] = 0
+	require.EqualError(t, ValidateJovianExtraData(bad), "Jovian extraData version byte should be 1, got 0")
+	require.EqualError(t, ValidateJovianExtraData(EncodeJovianExtraData(0, 6, 7)), "holocene extraData must encode a non-zero denominator")
 
-func (f forkChecker) IsHolocene(uint64) bool { return f.holocene }
-func (f forkChecker) IsJovian(uint64) bool   { return f.jovian }
-
-// TestValidateOptimismExtraData covers the fork dispatch only: that the schedule selects the
-// right per-fork validator. Each validator's own edge cases are covered by its dedicated test
-// (e.g. TestValidateHoloceneExtraData).
-func TestValidateOptimismExtraData(t *testing.T) {
-	holoceneExtra := EncodeHoloceneExtraData(250, 6)
-	jovianExtra := EncodeJovianExtraData(250, 6, 7)
-
-	tests := []struct {
-		name     string
-		fc       forkChecker
-		extra    []byte
-		expected string
-	}{
-		{
-			name:  "pre-Holocene requires empty",
-			fc:    forkChecker{},
-			extra: nil,
-		},
-		{
-			name:     "pre-Holocene rejects non-empty",
-			fc:       forkChecker{},
-			extra:    []byte{0x00},
-			expected: "extraData must be empty before Holocene",
-		},
-		{
-			name:  "Holocene routes to Holocene validator",
-			fc:    forkChecker{holocene: true},
-			extra: holoceneExtra,
-		},
-		{
-			name:  "Jovian routes to Jovian validator",
-			fc:    forkChecker{holocene: true, jovian: true},
-			extra: jovianExtra,
-		},
-		{
-			// Holocene-sized extraData is valid length for Holocene but wrong for Jovian, so a
-			// Jovian-active check rejecting it confirms dispatch to the Jovian validator.
-			name:     "Jovian rejects Holocene-sized extraData",
-			fc:       forkChecker{holocene: true, jovian: true},
-			extra:    holoceneExtra,
-			expected: "Jovian extraData should be 17 bytes, got 9",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateOptimismExtraData(tc.fc, 0, tc.extra)
-			if tc.expected == "" && err != nil {
-				t.Errorf("Expected no error, but got: %v", err)
-			}
-			if tc.expected != "" && (err == nil || err.Error() != tc.expected) {
-				t.Errorf("Expected error: %s, but got: %v", tc.expected, err)
-			}
-		})
-	}
-}
-
-func TestValidateHoloceneExtraData(t *testing.T) {
-	tests := []struct {
-		name     string
-		extra    []byte
-		expected string
-	}{
-		{
-			name:     "Wrong Length",
-			extra:    []byte{0x00, 0x01},
-			expected: "holocene extraData should be 9 bytes, got 2",
-		},
-		{
-			name:     "Wrong Version",
-			extra:    []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-			expected: "holocene extraData version byte should be 0, got 1",
-		},
-		{
-			name:     "Zero denominator, non-zero elasticity",
-			extra:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01},
-			expected: "holocene extraData must encode a non-zero denominator",
-		},
-		{
-			name:     "Zero elasticity, non-zero denominator",
-			extra:    []byte{0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00},
-			expected: "holocene extraData must encode a non-zero elasticity",
-		},
-		{
-			name:     "Both zero (invalid)",
-			extra:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-			expected: "holocene extraData must encode a non-zero denominator",
-		},
-		{
-			name:  "Both non-zero (valid)",
-			extra: []byte{0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateHoloceneExtraData(tc.extra)
-			if tc.expected == "" && err != nil {
-				t.Errorf("Expected no error, but got: %v", err)
-			}
-			if tc.expected != "" && (err == nil || err.Error() != tc.expected) {
-				t.Errorf("Expected error: %s, but got: %v", tc.expected, err)
-			}
-		})
-	}
+	d, e, m := DecodeJovianExtraData(EncodeJovianExtraData(250, 6, 7))
+	require.Equal(t, uint64(250), d)
+	require.Equal(t, uint64(6), e)
+	require.Equal(t, uint64(7), *m)
 }

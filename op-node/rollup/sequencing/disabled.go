@@ -43,14 +43,6 @@ func (ds DisabledSequencer) SetMaxSafeLag(ctx context.Context, v uint64) error {
 	return ErrSequencerNotEnabled
 }
 
-func (ds DisabledSequencer) OverrideLeader(ctx context.Context) error {
-	return ErrSequencerNotEnabled
-}
-
-func (ds DisabledSequencer) ConductorEnabled(ctx context.Context) bool {
-	return false
-}
-
 func (ds DisabledSequencer) SetRecoverMode(mode bool) {}
 
 func (ds DisabledSequencer) Close() {}

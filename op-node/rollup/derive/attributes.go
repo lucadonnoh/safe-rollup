@@ -9,7 +9,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 
-	"github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
@@ -113,102 +112,32 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 			l2Parent, nextL2Time, eth.ToBlockID(l1Info), l1Info.Time()))
 	}
 
-	var upgradeTxs []hexutil.Bytes
-	if ba.rollupCfg.IsEcotoneActivationBlock(nextL2Time) {
-		upgradeTxs, err = EcotoneNetworkUpgradeTransactions()
-		if err != nil {
-			return nil, NewCriticalError(fmt.Errorf("failed to build ecotone network upgrade txs: %w", err))
-		}
-	}
-
-	if ba.rollupCfg.IsFjordActivationBlock(nextL2Time) {
-		fjord, err := FjordNetworkUpgradeTransactions()
-		if err != nil {
-			return nil, NewCriticalError(fmt.Errorf("failed to build fjord network upgrade txs: %w", err))
-		}
-		upgradeTxs = append(upgradeTxs, fjord...)
-	}
-
-	if ba.rollupCfg.IsIsthmusActivationBlock(nextL2Time) {
-		isthmus, err := IsthmusNetworkUpgradeTransactions()
-		if err != nil {
-			return nil, NewCriticalError(fmt.Errorf("failed to build isthmus network upgrade txs: %w", err))
-		}
-		upgradeTxs = append(upgradeTxs, isthmus...)
-	}
-
-	if ba.rollupCfg.IsJovianActivationBlock(nextL2Time) {
-		jovian, err := JovianNetworkUpgradeTransactions()
-		if err != nil {
-			return nil, NewCriticalError(fmt.Errorf("failed to build jovian network upgrade txs: %w", err))
-		}
-		upgradeTxs = append(upgradeTxs, jovian...)
-	}
-
-	// Starting with Karst, upgrade transactions are loaded from a NUT bundle and
-	// additional gas is allocated to the upgrade block so that upgrade transactions
-	// don't need to fit within the system tx gas limit.
-	var upgradeGas uint64
-	if ba.rollupCfg.IsL2CMActivationBlock(nextL2Time) {
-		nutTxs, nutGas, err := UpgradeTransactions(forks.Karst)
-		if err != nil {
-			return nil, NewCriticalError(fmt.Errorf("failed to build karst network upgrade txs: %w", err))
-		}
-		upgradeTxs = append(upgradeTxs, nutTxs...)
-		upgradeGas += nutGas
-	}
-
-	if ba.rollupCfg.IsLagoonActivationBlock(nextL2Time) {
-		// The NUT bundle carries the fork's predeploy upgrades. Interop is not supported.
-		lagoonTxs, lagoonGas, err := LagoonActivationUpgradeTransactions(false)
-		if err != nil {
-			return nil, NewCriticalError(err)
-		}
-		upgradeTxs = append(upgradeTxs, lagoonTxs...)
-		upgradeGas += lagoonGas
-	}
-
-	l1InfoTx, err := L1InfoDepositBytes(ba.rollupCfg, ba.l1ChainConfig, sysConfig, seqNumber, l1Info, nextL2Time)
+	l1InfoTx, err := L1InfoDepositBytes(ba.l1ChainConfig, sysConfig, seqNumber, l1Info)
 	if err != nil {
 		return nil, NewCriticalError(fmt.Errorf("failed to create l1InfoTx: %w", err))
 	}
 
-	txs := make([]hexutil.Bytes, 0, 1+len(depositTxs)+len(upgradeTxs))
+	// Every fork is active from genesis, so there are no network upgrade transactions.
+	txs := make([]hexutil.Bytes, 0, 1+len(depositTxs))
 	txs = append(txs, l1InfoTx)
 	txs = append(txs, depositTxs...)
-	txs = append(txs, upgradeTxs...)
 
-	var withdrawals *types.Withdrawals
-	if ba.rollupCfg.IsCanyon(nextL2Time) {
-		withdrawals = &types.Withdrawals{}
+	parentBeaconRoot := l1Info.ParentBeaconRoot()
+	if parentBeaconRoot == nil { // default to zero hash if there is no beacon-block-root available
+		parentBeaconRoot = new(common.Hash)
 	}
-
-	var parentBeaconRoot *common.Hash
-	if ba.rollupCfg.IsEcotone(nextL2Time) {
-		parentBeaconRoot = l1Info.ParentBeaconRoot()
-		if parentBeaconRoot == nil { // default to zero hash if there is no beacon-block-root available
-			parentBeaconRoot = new(common.Hash)
-		}
-	}
-
-	gasLimit := sysConfig.GasLimit + upgradeGas
-
-	r := &eth.PayloadAttributes{
+	gasLimit := sysConfig.GasLimit
+	eip1559Params := sysConfig.EIP1559Params
+	return &eth.PayloadAttributes{
 		Timestamp:             hexutil.Uint64(nextL2Time),
 		PrevRandao:            eth.Bytes32(l1Info.MixDigest()),
 		SuggestedFeeRecipient: predeploys.SequencerFeeVaultAddr,
 		Transactions:          txs,
 		NoTxPool:              true,
 		GasLimit:              (*eth.Uint64Quantity)(&gasLimit),
-		Withdrawals:           withdrawals,
+		Withdrawals:           &types.Withdrawals{},
 		ParentBeaconBlockRoot: parentBeaconRoot,
-	}
-	if ba.rollupCfg.IsHolocene(nextL2Time) {
-		r.EIP1559Params = new(eth.Bytes8)
-		*r.EIP1559Params = sysConfig.EIP1559Params
-	}
-	if ba.rollupCfg.IsJovian(nextL2Time) {
-		r.MinBaseFee = &sysConfig.MinBaseFee
-	}
-	return r, nil
+		EIP1559Params:         &eip1559Params,
+		MinBaseFee:            &sysConfig.MinBaseFee,
+	}, nil
 }

@@ -155,7 +155,7 @@ func TestQueue_Send(t *testing.T) {
 				nonceMu.Unlock()
 				txHash := tx.Hash()
 				nonceMu.Lock()
-				backend.mine(&txHash, tx.GasFeeCap(), nil)
+				backend.mine(&txHash, tx.GasFeeCap())
 				nonceForTxId[uint(index)] = tx.Nonce()
 				nonceMu.Unlock()
 				return nil
@@ -238,7 +238,7 @@ func testQueueSubsequentTxsFailAfterTxFailure(t *testing.T) {
 			switch tx.Data()[0] {
 			case 0:
 				txHash := tx.Hash()
-				backend.mine(&txHash, tx.GasFeeCap(), nil)
+				backend.mine(&txHash, tx.GasFeeCap())
 				return nil
 			case 1:
 				close(secondSendStarted)
@@ -246,7 +246,7 @@ func testQueueSubsequentTxsFailAfterTxFailure(t *testing.T) {
 				return core.ErrNonceTooLow
 			case 2:
 				txHash := tx.Hash()
-				backend.mine(&txHash, tx.GasFeeCap(), nil)
+				backend.mine(&txHash, tx.GasFeeCap())
 				return nil
 			default:
 				return fmt.Errorf("unexpected tx id %d", tx.Data()[0])
@@ -303,7 +303,7 @@ func TestQueue_SendAfterFailure(t *testing.T) {
 			return core.ErrNonceTooLow
 		}
 		txHash := tx.Hash()
-		backend.mine(&txHash, tx.GasFeeCap(), nil)
+		backend.mine(&txHash, tx.GasFeeCap())
 		return nil
 	})
 
@@ -350,7 +350,7 @@ func newMockBackendWithConfirmationDelay(g *gasPricer, wg *sync.WaitGroup) *mock
 // MineAll mines all transactions in the cache.
 func (b *mockBackendWithConfirmationDelay) MineAll() {
 	for hash, tx := range b.cachedTxs {
-		b.mine(&hash, tx.GasFeeCap(), nil)
+		b.mine(&hash, tx.GasFeeCap())
 	}
 }
 

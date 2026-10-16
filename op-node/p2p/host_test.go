@@ -30,7 +30,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
-	"github.com/ethereum-optimism/optimism/op-service/testutils"
 )
 
 func TestingConfig(t *testing.T) *Config {
@@ -117,8 +116,8 @@ func TestP2PFull(t *testing.T) {
 	confB.Store = sync.MutexWrap(ds.NewMapDatastore())
 	// TODO: maybe swap the order of sec/mux preferences, to test that negotiation works
 
-	runCfgA := &testutils.MockRuntimeConfig{P2PSeqAddress: common.Address{0x42}}
-	runCfgB := &testutils.MockRuntimeConfig{P2PSeqAddress: common.Address{0x42}}
+	runCfgA := SequencerAddress(common.Address{0x42})
+	runCfgB := SequencerAddress(common.Address{0x42})
 
 	logA := testlog.Logger(t, log.LevelError).New("host", "A")
 	nodeA, err := NewNodeP2P(context.Background(), &rollup.Config{}, logA, &confA, &mockGossipIn{}, nil, runCfgA, metrics.NoopMetrics, clock.SystemClock)
@@ -315,9 +314,9 @@ func TestDiscovery(t *testing.T) {
 	confB.Store = sync.MutexWrap(ds.NewMapDatastore())
 	confB.DiscoveryDB = discDBB
 
-	runCfgA := &testutils.MockRuntimeConfig{P2PSeqAddress: common.Address{0x42}}
-	runCfgB := &testutils.MockRuntimeConfig{P2PSeqAddress: common.Address{0x42}}
-	runCfgC := &testutils.MockRuntimeConfig{P2PSeqAddress: common.Address{0x42}}
+	runCfgA := SequencerAddress(common.Address{0x42})
+	runCfgB := SequencerAddress(common.Address{0x42})
+	runCfgC := SequencerAddress(common.Address{0x42})
 
 	resourcesCtx, resourcesCancel := context.WithCancel(context.Background())
 	defer resourcesCancel()

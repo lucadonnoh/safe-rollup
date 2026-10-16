@@ -1,21 +1,18 @@
 package batcher_test
 
 import (
-	"fmt"
-	"math"
 	"testing"
 	"time"
 
+	altda "github.com/ethereum-optimism/optimism/op-alt-da"
 	"github.com/ethereum-optimism/optimism/op-batcher/batcher"
 	"github.com/ethereum-optimism/optimism/op-batcher/compressor"
-	"github.com/ethereum-optimism/optimism/op-batcher/flags"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-service/log/logcli"
 	"github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
 	"github.com/ethereum-optimism/optimism/op-service/rpc"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
-	"github.com/ethereum/go-ethereum/params"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,7 +30,6 @@ func validBatcherConfig() batcher.CLIConfig {
 		Compressor:             "shadow",
 		Stopped:                false,
 		BatchType:              0,
-		DataAvailabilityType:   flags.CalldataType,
 		TxMgrConfig:            txmgr.NewCLIConfig("fake", txmgr.DefaultBatcherFlagValues),
 		LogConfig:              logcli.DefaultCLIConfig(),
 		MetricsConfig:          metrics.DefaultCLIConfig(),
@@ -41,15 +37,7 @@ func validBatcherConfig() batcher.CLIConfig {
 		// The compressor config is not checked in config.Check()
 		RPC:             rpc.DefaultCLIConfig(),
 		CompressionAlgo: derive.Zlib,
-		ThrottleConfig: batcher.ThrottleConfig{
-			ControllerType:      flags.DefaultThrottleControllerType,
-			LowerThreshold:      flags.DefaultThrottleLowerThreshold,
-			UpperThreshold:      flags.DefaultThrottleUpperThreshold,
-			TxSizeLowerLimit:    flags.DefaultThrottleTxSizeLowerLimit,
-			TxSizeUpperLimit:    flags.DefaultThrottleTxSizeUpperLimit,
-			BlockSizeLowerLimit: flags.DefaultThrottleBlockSizeLowerLimit,
-			BlockSizeUpperLimit: flags.DefaultThrottleBlockSizeUpperLimit,
-		},
+		AltDA:           altda.CLIConfig{DAServerURL: "http://fake"},
 	}
 }
 
@@ -57,44 +45,6 @@ func TestValidBatcherConfig(t *testing.T) {
 	cfg := validBatcherConfig()
 	require.NoError(t, cfg.Check(), "valid config should pass the check function")
 }
-
-func TestBatcherConfigMaxL1TxSize(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		size    uint64
-		daType  flags.DataAvailabilityType
-		altDA   bool
-		wantErr bool
-	}{
-		{name: "default calldata size", size: 120_000, daType: flags.CalldataType},
-		{name: "below calldata limit", size: 261_908, daType: flags.CalldataType},
-		{name: "at calldata limit", size: 261_909, daType: flags.CalldataType},
-		{name: "above calldata limit", size: 261_910, daType: flags.CalldataType, wantErr: true},
-		{name: "maximum uint64 calldata size", size: math.MaxUint64, daType: flags.CalldataType, wantErr: true},
-		{name: "blobs ignore calldata limit", size: 261_910, daType: flags.BlobsType},
-		{name: "auto uses fixed calldata fallback size", size: 261_910, daType: flags.AutoType},
-		{name: "alt DA posts a commitment", size: 261_910, daType: flags.CalldataType, altDA: true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			cfg := validBatcherConfig()
-			cfg.MaxL1TxSize = tc.size
-			cfg.DataAvailabilityType = tc.daType
-			cfg.AltDA.Enabled = tc.altDA
-			if tc.wantErr {
-				require.ErrorContains(t, cfg.Check(), "exceeds maximum calldata size 261909")
-			} else {
-				require.NoError(t, cfg.Check())
-			}
-		})
-	}
-}
-
-// Set current
-var maxBlobsPerBlock = params.DefaultPragueBlobConfig.Max
 
 func TestBatcherConfig(t *testing.T) {
 	tests := []struct {
@@ -138,22 +88,14 @@ func TestBatcherConfig(t *testing.T) {
 			errString: "unknown batch type: 100",
 		},
 		{
-			name:      "invalid batch submission policy",
-			override:  func(c *batcher.CLIConfig) { c.DataAvailabilityType = "foo" },
-			errString: "unknown data availability type: \"foo\"",
+			name:      "no DA server",
+			override:  func(c *batcher.CLIConfig) { c.AltDA.DAServerURL = "" },
+			errString: "DA server URL is required",
 		},
 		{
 			name:      "zero TargetNumFrames",
 			override:  func(c *batcher.CLIConfig) { c.TargetNumFrames = 0 },
 			errString: "TargetNumFrames must be at least 1",
-		},
-		{
-			name: fmt.Sprintf("larger %d TargetNumFrames for blobs", maxBlobsPerBlock),
-			override: func(c *batcher.CLIConfig) {
-				c.TargetNumFrames = maxBlobsPerBlock + 1
-				c.DataAvailabilityType = flags.BlobsType
-			},
-			errString: fmt.Sprintf("too many frames for blob transactions, max %d", maxBlobsPerBlock),
 		},
 		{
 			name: "invalid compr ratio for ratio compressor",
@@ -162,24 +104,6 @@ func TestBatcherConfig(t *testing.T) {
 				c.Compressor = compressor.RatioKind
 			},
 			errString: "invalid ApproxComprRatio 4.2 for ratio compressor",
-		},
-		{
-			name: "throttle_max_threshold=throttle_threshold",
-			override: func(c *batcher.CLIConfig) {
-				c.ThrottleConfig.LowerThreshold = 5
-				c.ThrottleConfig.UpperThreshold = 5
-
-			},
-			errString: "throttle.upper-threshold must be greater than throttle.lower-threshold",
-		},
-		{
-			name: "throttle_max_threshold=throttle_threshold",
-			override: func(c *batcher.CLIConfig) {
-				c.ThrottleConfig.LowerThreshold = 5
-				c.ThrottleConfig.UpperThreshold = 4
-
-			},
-			errString: "throttle.upper-threshold must be greater than throttle.lower-threshold",
 		},
 	}
 

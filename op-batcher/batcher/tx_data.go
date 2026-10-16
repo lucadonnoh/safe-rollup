@@ -6,7 +6,6 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive/params"
-	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
 // txData represents the data for a single transaction.
@@ -16,7 +15,6 @@ import (
 // different channels.
 type txData struct {
 	frames []frameData
-	asBlob bool // indicates whether this should be sent as blob
 }
 
 func singleFrameTxData(frame frameData) txData {
@@ -41,18 +39,6 @@ func (td *txData) CallData() []byte {
 		data = append(data, f.data...)
 	}
 	return data
-}
-
-func (td *txData) Blobs() ([]*eth.Blob, error) {
-	blobs := make([]*eth.Blob, 0, len(td.frames))
-	for _, f := range td.frames {
-		var blob eth.Blob
-		if err := blob.FromData(append([]byte{params.DerivationVersion0}, f.data...)); err != nil {
-			return nil, err
-		}
-		blobs = append(blobs, &blob)
-	}
-	return blobs, nil
 }
 
 // Len returns the sum of all the sizes of data in all frames.

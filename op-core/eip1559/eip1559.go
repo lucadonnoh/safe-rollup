@@ -7,41 +7,7 @@ import (
 	"math"
 )
 
-const (
-	HoloceneExtraDataVersionByte = uint8(0x00)
-	JovianExtraDataVersionByte   = uint8(0x01)
-)
-
-type ForkChecker interface {
-	IsHolocene(time uint64) bool
-	IsJovian(time uint64) bool
-}
-
-// ValidateOptimismExtraData validates the Optimism extra data.
-// It uses the fork schedule and block time to determine which rules apply.
-func ValidateOptimismExtraData(fc ForkChecker, time uint64, extraData []byte) error {
-	if fc.IsJovian(time) {
-		return ValidateJovianExtraData(extraData)
-	} else if fc.IsHolocene(time) {
-		return ValidateHoloceneExtraData(extraData)
-	} else if len(extraData) > 0 { // pre-Holocene, apart from the genesis block
-		return errors.New("extraData must be empty before Holocene")
-	}
-	return nil
-}
-
-// DecodeOptimismExtraData decodes the Optimism extra data.
-// It uses the config and parent time to determine how to do the decoding.
-// The extraData is expected to already be valid.
-func DecodeOptimismExtraData(fc ForkChecker, time uint64, extraData []byte) (uint64, uint64, *uint64) {
-	if fc.IsJovian(time) {
-		return DecodeJovianExtraData(extraData)
-	} else if fc.IsHolocene(time) && len(extraData) == 9 {
-		denominator, elasticity := DecodeHolocene1559Params(extraData[1:])
-		return denominator, elasticity, nil
-	}
-	return 0, 0, nil
-}
+const JovianExtraDataVersionByte = uint8(0x01)
 
 // DecodeHolocene1559Params extracts the Holcene 1559 parameters from the encoded form defined here:
 // https://github.com/ethereum-optimism/specs/blob/main/specs/protocol/holocene/exec-engine.md#eip-1559-parameters-in-payloadattributesv3
@@ -66,19 +32,6 @@ func EncodeHolocene1559Params(denom, elasticity uint64) []byte {
 	}
 	binary.BigEndian.PutUint32(r[:4], uint32(denom))
 	binary.BigEndian.PutUint32(r[4:], uint32(elasticity))
-	return r
-}
-
-// EncodeHoloceneExtraData encodes the eip-1559 parameters into the header 'ExtraData' format. Will panic if either
-// value is outside uint32 range.
-func EncodeHoloceneExtraData(denom, elasticity uint64) []byte {
-	r := make([]byte, 9)
-	if denom > math.MaxUint32 || elasticity > math.MaxUint32 {
-		panic("eip-1559 parameters out of uint32 range")
-	}
-	// leave version byte 0
-	binary.BigEndian.PutUint32(r[1:5], uint32(denom))
-	binary.BigEndian.PutUint32(r[5:], uint32(elasticity))
 	return r
 }
 
@@ -112,33 +65,13 @@ func validateHoloceneExtraDataPart(extra []byte) error {
 	return nil
 }
 
-// ValidateHoloceneExtraData checks if the header extraData is valid according to the Holocene
-// rules: the encoded denominator and elasticity must both be non-zero.
-// Note the difference to the payload attributes validation, where both values may also be zero
-// (at the same time).
-func ValidateHoloceneExtraData(extra []byte) error {
-	if len(extra) != 9 {
-		return fmt.Errorf("holocene extraData should be 9 bytes, got %d", len(extra))
-	}
-	if extra[0] != HoloceneExtraDataVersionByte {
-		return fmt.Errorf("holocene extraData version byte should be %d, got %d", HoloceneExtraDataVersionByte, extra[0])
-	}
-	return validateHoloceneExtraDataPart(extra[1:])
-}
-
 // DecodeJovianExtraData decodes the extraData parameters from the encoded form defined here:
 // https://specs.optimism.io/protocol/jovian/exec-engine.html
 //
-// Returns 0,0,nil if the format is invalid, and d, e, nil for the Holocene length, to provide best effort behavior for non-MinBaseFee extradata, though ValidateJovianExtraData should be used instead of this function for
-// validity checking.
+// Returns 0,0,nil if the format is invalid, though ValidateJovianExtraData should be used instead
+// of this function for validity checking.
 func DecodeJovianExtraData(extra []byte) (uint64, uint64, *uint64) {
-	// Best effort to decode the extraData for every block in the chain's history,
-	// including blocks before the minimum base fee feature was enabled.
-	if len(extra) == 9 {
-		// This is Holocene extraData
-		denominator, elasticity := DecodeHolocene1559Params(extra[1:9])
-		return denominator, elasticity, nil
-	} else if len(extra) == 17 {
+	if len(extra) == 17 {
 		// Decode extraData when the minimum base fee fork is enabled
 		denominator, elasticity := DecodeHolocene1559Params(extra[1:9])
 		minBaseFee := binary.BigEndian.Uint64(extra[9:])

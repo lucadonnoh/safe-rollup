@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"math/big"
 	"sync/atomic"
 	"time"
 
 	opservice "github.com/ethereum-optimism/optimism/op-service"
-	"github.com/ethereum-optimism/optimism/op-service/bgpo"
 	"github.com/ethereum-optimism/optimism/op-service/cliiface"
 	opcrypto "github.com/ethereum-optimism/optimism/op-service/crypto"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -18,7 +16,6 @@ import (
 	opsigner "github.com/ethereum-optimism/optimism/op-service/signer"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/params"
 	"github.com/urfave/cli/v2"
 )
 
@@ -47,10 +44,6 @@ const (
 	TxNotInMempoolTimeoutFlagName      = "txmgr.not-in-mempool-timeout"
 	ReceiptQueryIntervalFlagName       = "txmgr.receipt-query-interval"
 	AlreadyPublishedCustomErrsFlagName = "txmgr.already-published-custom-errs"
-	CellProofTimeFlagName              = "txmgr.cell-proof-time"
-	BlobTipCapDynamicFlagName          = "txmgr.blob-tip-cap-dynamic"
-	BlobTipCapPercentileFlagName       = "txmgr.blob-tip-cap-percentile"
-	BlobTipCapRangeFlagName            = "txmgr.blob-tip-cap-range"
 )
 
 var (
@@ -59,12 +52,6 @@ var (
 		Usage: "DEPRECATED: The HD path used to derive the sequencer wallet from the " +
 			"mnemonic. The mnemonic flag must also be set.",
 		EnvVars: []string{"OP_BATCHER_SEQUENCER_HD_PATH"},
-	}
-	L2OutputHDPathFlag = &cli.StringFlag{
-		Name: "l2-output-hd-path",
-		Usage: "DEPRECATED:The HD path used to derive the l2output wallet from the " +
-			"mnemonic. The mnemonic flag must also be set.",
-		EnvVars: []string{"OP_PROPOSER_L2_OUTPUT_HD_PATH"},
 	}
 )
 
@@ -83,15 +70,10 @@ type DefaultFlagValues struct {
 	TxSendTimeout             time.Duration
 	TxNotInMempoolTimeout     time.Duration
 	ReceiptQueryInterval      time.Duration
-	CellProofTime             uint64
-	BlobTipCapDynamic         bool
-	BlobTipCapPercentile      int
-	BlobTipCapRange           int
 }
 
 var (
-	defaultCellProofTime     uint64 = math.MaxUint64
-	DefaultBatcherFlagValues        = DefaultFlagValues{
+	DefaultBatcherFlagValues = DefaultFlagValues{
 		NumConfirmations:          uint64(10),
 		SafeAbortNonceTooLowCount: uint64(3),
 		FeeLimitMultiplier:        uint64(5),
@@ -106,84 +88,11 @@ var (
 		TxSendTimeout:             0, // Try sending txs indefinitely, to preserve tx ordering for Holocene
 		TxNotInMempoolTimeout:     2 * time.Minute,
 		ReceiptQueryInterval:      12 * time.Second,
-		CellProofTime:             defaultCellProofTime,
-		BlobTipCapDynamic:         false,
-		BlobTipCapPercentile:      60,
-		BlobTipCapRange:           20,
 	}
-	DefaultChallengerFlagValues = DefaultFlagValues{
-		NumConfirmations:          uint64(3),
-		SafeAbortNonceTooLowCount: uint64(3),
-		FeeLimitMultiplier:        uint64(5),
-		FeeLimitThresholdGwei:     100.0,
-		MinTipCapGwei:             1.0,
-		MinBaseFeeGwei:            1.0,
-		ResubmissionTimeout:       24 * time.Second,
-		NetworkTimeout:            10 * time.Second,
-		RetryInterval:             1 * time.Second,
-		MaxRetries:                uint64(10),
-		TxSendTimeout:             2 * time.Minute,
-		TxNotInMempoolTimeout:     1 * time.Minute,
-		ReceiptQueryInterval:      12 * time.Second,
-		CellProofTime:             defaultCellProofTime,
-		BlobTipCapDynamic:         false,
-		BlobTipCapPercentile:      0,
-		BlobTipCapRange:           0,
-	}
-
-	// geth enforces a 1 gwei minimum for blob tx fee
-	defaultMinBlobTxFee = big.NewInt(params.GWei)
 )
-
-// BTOConfig configures the BlobTipOracle for dynamic blob tip cap estimation.
-// If provided to txmgr.Config, the txmgr will create and manage a BlobTipOracle.
-type BTOConfig struct {
-	// Backend is the ethclient that implements bgpo.BTOBackend
-	Backend bgpo.BTOBackend
-	// ChainConfig is the L1 chain config for blob fee calculation
-	ChainConfig *params.ChainConfig
-	// BlobTipCapRange is the number of blocks to analyze (default: 20)
-	BlobTipCapRange int
-	// BlobTipCapPercentile is the percentile for tip suggestion (default: 60)
-	BlobTipCapPercentile int
-}
 
 func CLIFlags(envPrefix string) []cli.Flag {
 	return CLIFlagsWithDefaults(envPrefix, DefaultBatcherFlagValues)
-}
-
-// CLIFlagsWithBTO returns CLIFlags with the BlobTipOracle flags included.
-// Only the batcher should use this, as it's the only service that uses blob transactions.
-func CLIFlagsWithBTO(envPrefix string) []cli.Flag {
-	return CLIFlagsWithDefaultsAndBTO(envPrefix, DefaultBatcherFlagValues)
-}
-
-// CLIFlagsWithDefaultsAndBTO returns CLIFlagsWithDefaults with the BlobTipOracle flags included.
-// Only the batcher should use this, as it's the only service that uses blob transactions.
-func CLIFlagsWithDefaultsAndBTO(envPrefix string, defaults DefaultFlagValues) []cli.Flag {
-	prefixEnvVars := func(name string) []string {
-		return opservice.PrefixEnvVar(envPrefix, name)
-	}
-	return append(CLIFlagsWithDefaults(envPrefix, defaults),
-		&cli.BoolFlag{
-			Name:    BlobTipCapDynamicFlagName,
-			Usage:   "Use dynamic blob tip cap from the blob tip oracle instead of static tip cap for blob transactions. Regular transactions still use min-tip-cap/max-tip-cap.",
-			EnvVars: prefixEnvVars("TXMGR_BLOB_TIP_CAP_DYNAMIC"),
-			Value:   defaults.BlobTipCapDynamic,
-		},
-		&cli.IntFlag{
-			Name:    BlobTipCapPercentileFlagName,
-			Usage:   "Percentile of recent blob tx tips to use for suggestion (1-100). Only used when blob-tip-cap-dynamic is enabled.",
-			EnvVars: prefixEnvVars("TXMGR_BLOB_TIP_CAP_PERCENTILE"),
-			Value:   defaults.BlobTipCapPercentile,
-		},
-		&cli.IntFlag{
-			Name:    BlobTipCapRangeFlagName,
-			Usage:   "Number of recent blocks to analyze for blob tip cap distribution. Only used when blob-tip-cap-dynamic is enabled.",
-			EnvVars: prefixEnvVars("TXMGR_BLOB_TIP_CAP_RANGE"),
-			Value:   defaults.BlobTipCapRange,
-		},
-	)
 }
 
 func CLIFlagsWithDefaults(envPrefix string, defaults DefaultFlagValues) []cli.Flag {
@@ -305,12 +214,6 @@ func CLIFlagsWithDefaults(envPrefix string, defaults DefaultFlagValues) []cli.Fl
 			Usage:   "List of custom RPC error messages that indicate that a transaction has already been published.",
 			EnvVars: prefixEnvVars("TXMGR_ALREADY_PUBLISHED_CUSTOM_ERRS"),
 		},
-		&cli.Uint64Flag{
-			Name:    CellProofTimeFlagName,
-			Usage:   "Enables cell proofs in blob transactions for Fusaka (EIP-7742) compatibility from the provided unix timestamp. Should be set to the L1 Fusaka time. May be left blank for Ethereum Mainnet, Sepolia, Holesky, or Hoodi L1s.",
-			EnvVars: prefixEnvVars("TXMGR_CELL_PROOF_TIME"),
-			Value:   defaults.CellProofTime,
-		},
 	}, opsigner.CLIFlags(envPrefix, "")...)
 }
 
@@ -319,7 +222,6 @@ type CLIConfig struct {
 	Mnemonic                   string
 	HDPath                     string
 	SequencerHDPath            string
-	L2OutputHDPath             string
 	PrivateKey                 string
 	SignerCLIConfig            opsigner.CLIConfig
 	NumConfirmations           uint64
@@ -339,10 +241,6 @@ type CLIConfig struct {
 	TxSendTimeout              time.Duration
 	TxNotInMempoolTimeout      time.Duration
 	AlreadyPublishedCustomErrs []string
-	CellProofTime              uint64
-	BlobTipCapDynamic          bool
-	BlobTipCapPercentile       int
-	BlobTipCapRange            int
 }
 
 func NewCLIConfig(l1RPCURL string, defaults DefaultFlagValues) CLIConfig {
@@ -363,10 +261,6 @@ func NewCLIConfig(l1RPCURL string, defaults DefaultFlagValues) CLIConfig {
 		TxNotInMempoolTimeout:     defaults.TxNotInMempoolTimeout,
 		ReceiptQueryInterval:      defaults.ReceiptQueryInterval,
 		SignerCLIConfig:           opsigner.NewCLIConfig(),
-		CellProofTime:             defaults.CellProofTime,
-		BlobTipCapDynamic:         defaults.BlobTipCapDynamic,
-		BlobTipCapPercentile:      defaults.BlobTipCapPercentile,
-		BlobTipCapRange:           defaults.BlobTipCapRange,
 	}
 }
 
@@ -399,14 +293,6 @@ func (m CLIConfig) Check() error {
 	if m.SafeAbortNonceTooLowCount == 0 {
 		return errors.New("SafeAbortNonceTooLowCount must not be 0")
 	}
-	if m.BlobTipCapDynamic {
-		if m.BlobTipCapPercentile < 1 || m.BlobTipCapPercentile > 100 {
-			return fmt.Errorf("BlobTipCapPercentile must be between 1 and 100, got %d", m.BlobTipCapPercentile)
-		}
-		if m.BlobTipCapRange < 1 {
-			return fmt.Errorf("BlobTipCapRange must be at least 1, got %d", m.BlobTipCapRange)
-		}
-	}
 	if err := m.SignerCLIConfig.Check(); err != nil {
 		return err
 	}
@@ -437,7 +323,6 @@ func ReadCLIConfig(ctx cliiface.Context) CLIConfig {
 		Mnemonic:                   ctx.String(MnemonicFlagName),
 		HDPath:                     ctx.String(HDPathFlagName),
 		SequencerHDPath:            ctx.String(SequencerHDPathFlag.Name),
-		L2OutputHDPath:             ctx.String(L2OutputHDPathFlag.Name),
 		PrivateKey:                 ctx.String(PrivateKeyFlagName),
 		SignerCLIConfig:            opsigner.ReadCLIConfig(ctx),
 		NumConfirmations:           ctx.Uint64(NumConfirmationsFlagName),
@@ -457,10 +342,6 @@ func ReadCLIConfig(ctx cliiface.Context) CLIConfig {
 		TxSendTimeout:              ctx.Duration(TxSendTimeoutFlagName),
 		TxNotInMempoolTimeout:      ctx.Duration(TxNotInMempoolTimeoutFlagName),
 		AlreadyPublishedCustomErrs: ctx.StringSlice(AlreadyPublishedCustomErrsFlagName),
-		CellProofTime:              ctx.Uint64(CellProofTimeFlagName),
-		BlobTipCapDynamic:          ctx.Bool(BlobTipCapDynamicFlagName),
-		BlobTipCapPercentile:       ctx.Int(BlobTipCapPercentileFlagName),
-		BlobTipCapRange:            ctx.Int(BlobTipCapRangeFlagName),
 	}
 }
 
@@ -487,8 +368,6 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 	hdPath := cfg.HDPath
 	if hdPath == "" && cfg.SequencerHDPath != "" {
 		hdPath = cfg.SequencerHDPath
-	} else if hdPath == "" && cfg.L2OutputHDPath != "" {
-		hdPath = cfg.L2OutputHDPath
 	}
 
 	signerFactory, from, err := opcrypto.SignerFactoryFromConfig(l, cfg.PrivateKey, cfg.Mnemonic, hdPath, cfg.SignerCLIConfig)
@@ -526,8 +405,6 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 		}
 	}
 
-	cellProofTime := fallbackToOsakaCellProofTimeIfKnown(chainID, cfg.CellProofTime)
-
 	res := Config{
 		Backend: l1,
 		ChainID: chainID,
@@ -543,23 +420,6 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 		NumConfirmations:           cfg.NumConfirmations,
 		SafeAbortNonceTooLowCount:  cfg.SafeAbortNonceTooLowCount,
 		AlreadyPublishedCustomErrs: cfg.AlreadyPublishedCustomErrs,
-		CellProofTime:              cellProofTime,
-	}
-
-	if cfg.BlobTipCapDynamic {
-		l1ChainID := eth.ChainIDFromBig(chainID)
-		l1ChainConfig := eth.L1ChainConfigByChainID(l1ChainID)
-		if l1ChainConfig == nil {
-			return nil, fmt.Errorf("failed to initialize blob tip oracle: L1 chain config not found for chain ID %s", chainID)
-		} else {
-			res.BlobTipCapDynamic.Store(cfg.BlobTipCapDynamic)
-			res.BTOConfig = &BTOConfig{
-				Backend:              l1,
-				ChainConfig:          l1ChainConfig,
-				BlobTipCapRange:      cfg.BlobTipCapRange,
-				BlobTipCapPercentile: cfg.BlobTipCapPercentile,
-			}
-		}
 	}
 
 	res.RebroadcastInterval.Store(int64(cfg.RebroadcastInterval))
@@ -570,20 +430,8 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 	res.MaxBaseFee.Store(maxBaseFee)
 	res.MinTipCap.Store(minTipCap)
 	res.MaxTipCap.Store(maxTipCap)
-	res.MinBlobTxFee.Store(defaultMinBlobTxFee)
 
 	return &res, nil
-}
-
-func fallbackToOsakaCellProofTimeIfKnown(chainID *big.Int, cellProofTime uint64) uint64 {
-	if cellProofTime != defaultCellProofTime {
-		return cellProofTime // We only fallback if nothing is set
-	}
-	l1ChainConfig := eth.L1ChainConfigByChainID(eth.ChainIDFromBig(chainID))
-	if l1ChainConfig != nil && l1ChainConfig.OsakaTime != nil {
-		return *l1ChainConfig.OsakaTime
-	}
-	return math.MaxUint64 // Network not known and no override specified, so we never use cell proofs
 }
 
 // Config houses parameters for altering the behavior of a SimpleTxManager.
@@ -618,8 +466,6 @@ type Config struct {
 	// Maximum tip cap (in Wei) to enforce when determining tx fees.
 	MaxTipCap atomic.Pointer[big.Int]
 
-	MinBlobTxFee atomic.Pointer[big.Int]
-
 	// ChainID is the chain ID of the L1 chain.
 	ChainID *big.Int
 
@@ -636,14 +482,12 @@ type Config struct {
 	NetworkTimeout time.Duration
 
 	// RetryInterval is the interval at which the tx manager will retry
-	// sending a transaction if it fails with a non-fatal error (e.g. the
-	// gapped nonce error in the blob pool).
+	// sending a transaction if it fails with a non-fatal error.
 	RetryInterval time.Duration
 
 	// MaxRetries is the maximum number of times to retry sending a
 	// transaction. This is used to limit the number of times we retry
-	// sending a transaction if it fails with a non-fatal error (e.g. the
-	// gapped nonce error in the blob pool).
+	// sending a transaction if it fails with a non-fatal error.
 	MaxRetries uint64
 
 	// ReceiptQueryInterval is the interval at which the tx manager will
@@ -671,17 +515,6 @@ type Config struct {
 	// List of custom RPC error messages that indicate that a transaction has
 	// already been published.
 	AlreadyPublishedCustomErrs []string
-
-	// CellProofTime is the time at which cell proofs are enabled in blob transaction (for Fusaka (EIP-7742) compatibility).
-	CellProofTime uint64
-
-	// BlobTipCapDynamic enables dynamic blob tip cap from the blob tip oracle
-	// instead of using static tip cap for blob transactions.
-	BlobTipCapDynamic atomic.Bool
-
-	// BTOConfig is the configuration for the BlobTipOracle.
-	// If nil, the BlobTipOracle will not be used.
-	BTOConfig *BTOConfig
 }
 
 func (m *Config) Check() error {

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
@@ -28,8 +27,6 @@ type EngineController interface {
 	RequestForkchoiceUpdate(ctx context.Context)
 	RequestPendingSafeUpdate(ctx context.Context)
 	IsEngineInitialELSyncing() bool
-	// IsDenied reports whether the given payload is on the SuperAuthority deny-list.
-	IsDenied(blockNumber uint64, payloadHash common.Hash) (bool, error)
 }
 
 type L2 interface {
@@ -229,26 +226,6 @@ func (eq *AttributesHandler) consolidateNextSafeAttributes(attributes *derive.At
 		eq.log.Warn("L2 reorg: existing unsafe block does not match derived attributes from L1",
 			"err", err, "unsafe", envelope.ExecutionPayload.ID(), "pending_safe", onto)
 
-		eq.reorgOutUnsafeChain(attributes)
-		return
-	}
-
-	// A denied block can re-enter the canonical chain via unsafe sync; the
-	// build-path deny check only runs on a consolidation mismatch, so gate here
-	// too. On a deny, force the build path (as with a mismatch) to reorg it out.
-	payload := envelope.ExecutionPayload
-	denied, err := eq.engineController.IsDenied(uint64(payload.BlockNumber), payload.BlockHash)
-	if err != nil {
-		// Fail closed: without a deny-list result we cannot promote the block, and
-		// we must not reorg either. Stall and retry on the next safe-head poke.
-		eq.emitter.Emit(eq.ctx, rollup.EngineTemporaryErrorEvent{
-			Err: fmt.Errorf("failed to check SuperAuthority deny-list for block %s during consolidation: %w", payload.ID(), err),
-		})
-		return
-	}
-	if denied {
-		eq.log.Warn("Consolidated block denied by SuperAuthority, forcing reorg to build replacement",
-			"blockNumber", payload.BlockNumber, "blockHash", payload.BlockHash, "pending_safe", onto)
 		eq.reorgOutUnsafeChain(attributes)
 		return
 	}

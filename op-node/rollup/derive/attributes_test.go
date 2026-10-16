@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
@@ -117,14 +116,14 @@ func TestPreparePayloadAttributes(t *testing.T) {
 		l1Info.InfoParentHash = l2Parent.L1Origin.Hash
 		l1Info.InfoNum = l2Parent.L1Origin.Number + 1
 		epoch := l1Info.ID()
-		l1InfoTx, err := L1InfoDepositBytes(mkCfg(), params.MergedTestChainConfig, testSysCfg, 0, l1Info, 0)
+		l1InfoTx, err := L1InfoDepositBytes(params.MergedTestChainConfig, testSysCfg, 0, l1Info)
 		require.NoError(t, err)
 		l1Fetcher.ExpectFetchReceipts(epoch.Hash, l1Info, nil, nil)
 		attrBuilder := NewFetchingAttributesBuilder(cfg, params.MergedTestChainConfig, l1Fetcher, l1CfgFetcher)
 		attrs, err := attrBuilder.PreparePayloadAttributes(context.Background(), l2Parent, epoch)
 		require.NoError(t, err)
 		require.NotNil(t, attrs)
-		require.Nil(t, attrs.EIP1559Params) // should be nil prior to Holocene
+		require.Equal(t, testSysCfg.EIP1559Params, *attrs.EIP1559Params)
 		require.Equal(t, l2Parent.Time+cfg.BlockTime, uint64(attrs.Timestamp))
 		require.Equal(t, eth.Bytes32(l1Info.InfoMixDigest), attrs.PrevRandao)
 		require.Equal(t, predeploys.SequencerFeeVaultAddr, attrs.SuggestedFeeRecipient)
@@ -156,7 +155,7 @@ func TestPreparePayloadAttributes(t *testing.T) {
 		require.NoError(t, err)
 
 		epoch := l1Info.ID()
-		l1InfoTx, err := L1InfoDepositBytes(cfg, params.MergedTestChainConfig, testSysCfg, 0, l1Info, 0)
+		l1InfoTx, err := L1InfoDepositBytes(params.MergedTestChainConfig, testSysCfg, 0, l1Info)
 		require.NoError(t, err)
 
 		l2Txs := append(append(make([]eth.Data, 0), l1InfoTx), usedDepositTxs...)
@@ -187,7 +186,7 @@ func TestPreparePayloadAttributes(t *testing.T) {
 		l1Info.InfoNum = l2Parent.L1Origin.Number
 
 		epoch := l1Info.ID()
-		l1InfoTx, err := L1InfoDepositBytes(cfg, params.MergedTestChainConfig, testSysCfg, l2Parent.SequenceNumber+1, l1Info, 0)
+		l1InfoTx, err := L1InfoDepositBytes(params.MergedTestChainConfig, testSysCfg, l2Parent.SequenceNumber+1, l1Info)
 		require.NoError(t, err)
 
 		l1Fetcher.ExpectInfoByHash(epoch.Hash, l1Info, nil)
@@ -204,7 +203,6 @@ func TestPreparePayloadAttributes(t *testing.T) {
 	})
 	t.Run("holocene 1559 params", func(t *testing.T) {
 		cfg := mkCfg()
-		cfg.ActivateAtGenesis(forks.Holocene)
 		rng := rand.New(rand.NewSource(1234))
 		l1Fetcher := &testutils.MockL1Source{}
 		defer l1Fetcher.AssertExpectations(t)
@@ -223,7 +221,7 @@ func TestPreparePayloadAttributes(t *testing.T) {
 		l1Info.InfoParentHash = l2Parent.L1Origin.Hash
 		l1Info.InfoNum = l2Parent.L1Origin.Number + 1
 		epoch := l1Info.ID()
-		l1InfoTx, err := L1InfoDepositBytes(cfg, params.MergedTestChainConfig, testSysCfg, 0, l1Info, 0)
+		l1InfoTx, err := L1InfoDepositBytes(params.MergedTestChainConfig, testSysCfg, 0, l1Info)
 		require.NoError(t, err)
 		l1Fetcher.ExpectFetchReceipts(epoch.Hash, l1Info, nil, nil)
 		attrBuilder := NewFetchingAttributesBuilder(cfg, params.MergedTestChainConfig, l1Fetcher, l1CfgFetcher)
@@ -233,63 +231,9 @@ func TestPreparePayloadAttributes(t *testing.T) {
 		require.Equal(t, l1InfoTx, []byte(attrs.Transactions[0]))
 	})
 
-	// Test that the payload attributes builder changes the deposit format based on L2-time-based regolith activation
-	t.Run("regolith", func(t *testing.T) {
-		cfg := mkCfg()
-		testCases := []struct {
-			name         string
-			l1Time       uint64
-			l2ParentTime uint64
-			regolithTime uint64
-			regolith     bool
-		}{
-			{"exactly", 900, 1000 - cfg.BlockTime, 1000, true},
-			{"almost", 900, 1000 - cfg.BlockTime - 1, 1000, false},
-			{"inactive", 700, 700, 1000, false},
-			{"l1 time before regolith", 1000, 1001, 1001, true},
-			{"l1 time way before regolith", 1000, 2000, 2000, true},
-			{"l1 time before regoltih and l2 after", 1000, 3000, 2000, true},
-		}
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				cfgCopy := *cfg // copy, we are making regolith config modifications
-				cfg := &cfgCopy
-				rng := rand.New(rand.NewSource(1234))
-				l1Fetcher := &testutils.MockL1Source{}
-				defer l1Fetcher.AssertExpectations(t)
-				l2Parent := testutils.RandomL2BlockRef(rng)
-				cfg.RegolithTime = &tc.regolithTime
-				l2Parent.Time = tc.l2ParentTime
-
-				l1CfgFetcher := &testutils.MockL2Client{}
-				l1CfgFetcher.ExpectSystemConfigByL2Hash(l2Parent.Hash, testSysCfg, nil)
-				defer l1CfgFetcher.AssertExpectations(t)
-
-				l1Info := testutils.RandomBlockInfo(rng)
-				l1Info.InfoParentHash = l2Parent.L1Origin.Hash
-				l1Info.InfoNum = l2Parent.L1Origin.Number + 1
-				l1Info.InfoTime = tc.l1Time
-
-				epoch := l1Info.ID()
-				time := tc.regolithTime
-				if !tc.regolith {
-					time--
-				}
-				l1InfoTx, err := L1InfoDepositBytes(cfg, params.MergedTestChainConfig, testSysCfg, 0, l1Info, time)
-				require.NoError(t, err)
-				l1Fetcher.ExpectFetchReceipts(epoch.Hash, l1Info, nil, nil)
-				attrBuilder := NewFetchingAttributesBuilder(cfg, params.MergedTestChainConfig, l1Fetcher, l1CfgFetcher)
-				attrs, err := attrBuilder.PreparePayloadAttributes(context.Background(), l2Parent, epoch)
-				require.NoError(t, err)
-				require.Equal(t, l1InfoTx, []byte(attrs.Transactions[0]))
-			})
-		}
-	})
-
 	t.Run("jovian", func(t *testing.T) {
 		t.Run("minimum base fee param", func(t *testing.T) {
 			cfg := mkCfg()
-			cfg.ActivateAtGenesis(forks.Jovian)
 			rng := rand.New(rand.NewSource(1234))
 			l1Fetcher := &testutils.MockL1Source{}
 			defer l1Fetcher.AssertExpectations(t)
@@ -310,7 +254,7 @@ func TestPreparePayloadAttributes(t *testing.T) {
 			l1Info.InfoParentHash = l2Parent.L1Origin.Hash
 			l1Info.InfoNum = l2Parent.L1Origin.Number + 1
 			epoch := l1Info.ID()
-			l1InfoTx, err := L1InfoDepositBytes(cfg, params.MergedTestChainConfig, testSysCfg, 0, l1Info, 0)
+			l1InfoTx, err := L1InfoDepositBytes(params.MergedTestChainConfig, testSysCfg, 0, l1Info)
 			require.NoError(t, err)
 			l1Fetcher.ExpectFetchReceipts(epoch.Hash, l1Info, nil, nil)
 			attrBuilder := NewFetchingAttributesBuilder(cfg, params.MergedTestChainConfig, l1Fetcher, l1CfgFetcher)
