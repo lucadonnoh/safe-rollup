@@ -60,28 +60,11 @@ type Genesis struct {
 	SystemConfig eth.SystemConfig `json:"system_config"`
 }
 
+// AltDAConfig enables alt-DA mode: the batcher posts commitments to the batch inbox and the
+// batch data lives in an offchain DA service.
 type AltDAConfig struct {
-	// L1 DataAvailabilityChallenge contract proxy address
-	DAChallengeAddress common.Address `json:"da_challenge_contract_address,omitempty"`
 	// CommitmentType specifies which commitment type can be used. Defaults to Keccak (type 0) if not present
 	CommitmentType string `json:"da_commitment_type"`
-	// MaxInputSize is the maximum byte size accepted for Keccak commitments.
-	// It defaults to the protocol limit when omitted.
-	MaxInputSize *uint64 `json:"da_max_input_size,omitempty"`
-	// DA challenge window value set on the DAC contract. Used in alt-da mode
-	// to compute when a commitment can no longer be challenged.
-	DAChallengeWindow uint64 `json:"da_challenge_window"`
-	// DA resolve window value set on the DAC contract. Used in alt-da mode
-	// to compute when a challenge expires and trigger a reorg if needed.
-	DAResolveWindow uint64 `json:"da_resolve_window"`
-}
-
-// MaxInputSizeOrDefault returns the configured maximum input size or the protocol default.
-func (c *AltDAConfig) MaxInputSizeOrDefault() uint64 {
-	if c == nil || c.MaxInputSize == nil {
-		return altda.MaxInputSize
-	}
-	return *c.MaxInputSize
 }
 
 type Config struct {
@@ -427,19 +410,8 @@ func (cfg *Config) ProbablyMissingPectraBlobSchedule() bool {
 // If the legacy values are set, they are copied to the new location. If both are set, they are check for consistency.
 func validateAltDAConfig(cfg *Config) error {
 	if cfg.AltDAConfig != nil {
-		if cfg.AltDAConfig.CommitmentType == altda.GenericCommitmentString && cfg.AltDAConfig.MaxInputSize != nil {
-			return errors.New("altDA max input size must be omitted for generic commitments")
-		}
-		if cfg.AltDAConfig.MaxInputSize != nil && *cfg.AltDAConfig.MaxInputSize == 0 {
-			return errors.New("altDA max input size must be greater than zero")
-		}
 		if !(cfg.AltDAConfig.CommitmentType == altda.KeccakCommitmentString || cfg.AltDAConfig.CommitmentType == altda.GenericCommitmentString) {
 			return fmt.Errorf("invalid commitment type: %v", cfg.AltDAConfig.CommitmentType)
-		}
-		if cfg.AltDAConfig.CommitmentType == altda.KeccakCommitmentString && cfg.AltDAConfig.DAChallengeAddress == (common.Address{}) {
-			return errors.New("Must set da_challenge_contract_address for keccak commitments")
-		} else if cfg.AltDAConfig.CommitmentType == altda.GenericCommitmentString && cfg.AltDAConfig.DAChallengeAddress != (common.Address{}) {
-			return errors.New("Must set empty da_challenge_contract_address for generic commitments")
 		}
 	}
 	return nil
@@ -814,21 +786,12 @@ func (c *Config) GetOPAltDAConfig() (altda.Config, error) {
 	if c.AltDAConfig == nil {
 		return altda.Config{}, errors.New("no altDA config")
 	}
-	if c.AltDAConfig.DAChallengeWindow == uint64(0) {
-		return altda.Config{}, errors.New("missing DAChallengeWindow")
-	}
-	if c.AltDAConfig.DAResolveWindow == uint64(0) {
-		return altda.Config{}, errors.New("missing DAResolveWindow")
-	}
 	t, err := altda.CommitmentTypeFromString(c.AltDAConfig.CommitmentType)
 	if err != nil {
 		return altda.Config{}, err
 	}
 	return altda.Config{
-		DAChallengeContractAddress: c.AltDAConfig.DAChallengeAddress,
-		ChallengeWindow:            c.AltDAConfig.DAChallengeWindow,
-		ResolveWindow:              c.AltDAConfig.DAResolveWindow,
-		CommitmentType:             t,
+		CommitmentType: t,
 	}, nil
 }
 
@@ -837,13 +800,7 @@ func (c *Config) AltDAEnabled() bool {
 }
 
 // SyncLookback computes the number of blocks to walk back in order to find the correct L1 origin.
-// In alt-da mode longest possible window is challenge + resolve windows.
 func (c *Config) SyncLookback() uint64 {
-	if c.AltDAEnabled() {
-		if win := (c.AltDAConfig.DAChallengeWindow + c.AltDAConfig.DAResolveWindow); win > c.SeqWindowSize {
-			return win
-		}
-	}
 	return c.SeqWindowSize
 }
 

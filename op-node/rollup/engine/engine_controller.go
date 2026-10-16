@@ -65,18 +65,6 @@ type Metrics interface {
 	RecordUnsafePayloadsBuffer(length uint64, memSize uint64, next eth.BlockID)
 }
 
-type SyncDeriver interface {
-	// ResetSafeDB removes safedb entries at or above ref (a zero ref clears it entirely).
-	// Called at EL-sync completion to trim a safedb whose tip isn't part of the synced chain.
-	ResetSafeDB(ref eth.L2BlockRef)
-	// SafeDBTip returns the L2 safe head at the safedb tip, reporting ok=false when the
-	// safedb is disabled or empty.
-	SafeDBTip(ctx context.Context) (l2 eth.BlockID, ok bool, err error)
-	// SafeDBHeadAtOrAboveL2 returns the L2 safe head the safedb recorded at the first L1 source
-	// whose safe head reached at least l2Num, reporting ok=false when there's no such entry.
-	SafeDBHeadAtOrAboveL2(ctx context.Context, l2Num uint64) (l2 eth.BlockID, ok bool, err error)
-}
-
 type AttributesForceResetter interface {
 	ForceReset()
 }
@@ -155,9 +143,6 @@ type EngineController struct {
 	needFCUCallForBackupUnsafeReorg bool
 
 	// Used at EL-sync completion to read/clear the safedb.
-	// EngineController is first initialized and used to initialize SyncDeriver.
-	// Embed SyncDeriver into EngineController after initializing SyncDeriver
-	SyncDeriver SyncDeriver
 
 	// Components that need to be notified during force reset
 	attributesResetter     AttributesForceResetter
@@ -925,21 +910,7 @@ func (e *EngineController) headsAfterELSync(ctx context.Context, ref eth.L2Block
 		}
 	}
 
-	safedbRef, fromSafeDB, err := e.safeDBRefAfterELSync(ctx, offsetRef)
-	if err != nil {
-		return eth.L2BlockRef{}, eth.L2BlockRef{}, err
-	}
 	finalized := e.FinalizedHead()
-	if fromSafeDB {
-		finalizedRef = safedbRef
-		if finalized.Number < finalizedRef.Number {
-			finalizedRef = finalized
-		}
-		return safedbRef, finalizedRef, nil
-	}
-
-	// safedb is disabled, or it didn't resolve to a valid safe head on the synced chain: choose
-	// the offset-derived head.
 	safeRef, finalizedRef = offsetRef, offsetRef
 	if finalizedRef.Number < finalized.Number {
 		finalizedRef = finalized
@@ -948,49 +919,6 @@ func (e *EngineController) headsAfterELSync(ctx context.Context, ref eth.L2Block
 		safeRef = e.SafeL2Head()
 	}
 	return safeRef, finalizedRef, nil
-}
-
-// safeDBRefAfterELSync returns the safedb-derived head to resume derivation from after EL sync,
-// reporting fromSafeDB=false when there's no usable safedb (resume from the offset head). It
-// preserves a safedb whose tip is on the synced chain; otherwise it looks up the recorded safe
-// head at or just above the offset head — a real stored block — and, if that is on the synced
-// chain, trims to it (keeping the consistent history below). If it isn't on the synced chain the
-// db can't be trusted, so it is cleared.
-func (e *EngineController) safeDBRefAfterELSync(ctx context.Context, offsetRef eth.L2BlockRef) (eth.L2BlockRef, bool, error) {
-	tip, ok, err := e.SyncDeriver.SafeDBTip(ctx)
-	if err != nil {
-		return eth.L2BlockRef{}, false, derive.NewTemporaryError(fmt.Errorf("failed to read safedb tip after EL sync: %w", err))
-	}
-	if !ok {
-		return eth.L2BlockRef{}, false, nil // no safedb
-	}
-	switch tipRef, err := e.engine.L2BlockRefByHash(ctx, tip.Hash); {
-	case err == nil:
-		// The tip is on the synced chain: resume from it, preserving the whole safedb.
-		return tipRef, true, nil
-	case !errors.Is(err, ethereum.NotFound):
-		return eth.L2BlockRef{}, false, derive.NewTemporaryError(fmt.Errorf("failed to resolve safedb tip %s after EL sync: %w", tip, err))
-	}
-	// The tip isn't on the synced chain (a recent reorg dropped it, or a foreign restore). Find the
-	// recorded safe head at or just above the offset head — a real stored block — and trim to it if
-	// it's on the synced chain; otherwise the db can't be trusted, so clear it.
-	anchor, ok, err := e.SyncDeriver.SafeDBHeadAtOrAboveL2(ctx, offsetRef.Number)
-	if err != nil {
-		return eth.L2BlockRef{}, false, derive.NewTemporaryError(fmt.Errorf("failed to read safedb head at offset %d after EL sync: %w", offsetRef.Number, err))
-	}
-	if ok {
-		switch anchorRef, err := e.engine.L2BlockRefByHash(ctx, anchor.Hash); {
-		case err == nil:
-			e.log.Warn("safedb tip not on synced chain, trimming to recorded head near offset", "anchor", anchorRef, "offset_head", offsetRef)
-			e.SyncDeriver.ResetSafeDB(anchorRef)
-			return anchorRef, true, nil
-		case !errors.Is(err, ethereum.NotFound):
-			return eth.L2BlockRef{}, false, derive.NewTemporaryError(fmt.Errorf("failed to check safedb head %s after EL sync: %w", anchor, err))
-		}
-	}
-	e.log.Warn("safedb has no canonical recorded head at the offset, clearing safedb", "offset_head", offsetRef)
-	e.SyncDeriver.ResetSafeDB(eth.L2BlockRef{})
-	return eth.L2BlockRef{}, false, nil
 }
 
 // shouldTryBackupUnsafeReorg checks reorging(restoring) unsafe head to backupUnsafeHead is needed.

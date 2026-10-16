@@ -1,0 +1,15 @@
+{
+  "name": "safe-rollup",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "viem": "2.57.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  }
+}

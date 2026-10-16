@@ -125,3 +125,9 @@ func TestDAClientService(t *testing.T) {
 	_, err = client.GetInput(ctx, NewKeccak256Commitment(input))
 	require.Error(t, err)
 }
+
+func RandomData(rng *rand.Rand, size int) []byte {
+	out := make([]byte, size)
+	rng.Read(out)
+	return out
+}

@@ -50,47 +50,9 @@ abstract contract ProxyAdmin_TestInit is Test {
             })
         );
 
-        // Deploy the legacy L1ChugSplashProxy with the admin as the owner
-        chugsplash = IL1ChugSplashProxy(
-            DeployUtils.create1({
-                _name: "L1ChugSplashProxy",
-                _args: DeployUtils.encodeConstructor(
-                    abi.encodeCall(IL1ChugSplashProxy.__constructor__, (address(admin)))
-                )
-            })
-        );
-
-        // Deploy the legacy AddressManager
-        addressManager = IAddressManager(
-            DeployUtils.create1({
-                _name: "AddressManager",
-                _args: DeployUtils.encodeConstructor(abi.encodeCall(IAddressManager.__constructor__, ()))
-            })
-        );
-        // The proxy admin must be the new owner of the address manager
-        addressManager.transferOwnership(address(admin));
-        // Deploy a legacy ResolvedDelegateProxy with the name `a`. Whatever `a` is set to in
-        // AddressManager will be the address that is used for the implementation.
-        resolved = IResolvedDelegateProxy(
-            DeployUtils.create1({
-                _name: "ResolvedDelegateProxy",
-                _args: DeployUtils.encodeConstructor(
-                    abi.encodeCall(IResolvedDelegateProxy.__constructor__, (addressManager, "a"))
-                )
-            })
-        );
-        // Impersonate alice for setting up the admin.
         vm.startPrank(alice);
-        // Set the address of the address manager in the admin so that it can resolve the
-        // implementation address of legacy ResolvedDelegateProxy based proxies.
-        admin.setAddressManager(IAddressManager(address(addressManager)));
-        // Set the reverse lookup of the ResolvedDelegateProxy proxy
-        admin.setImplementationName(address(resolved), "a");
-
         // Set the proxy types
         admin.setProxyType(address(proxy), IProxyAdmin.ProxyType.ERC1967);
-        admin.setProxyType(address(chugsplash), IProxyAdmin.ProxyType.CHUGSPLASH);
-        admin.setProxyType(address(resolved), IProxyAdmin.ProxyType.RESOLVED);
         vm.stopPrank();
 
         implementation = new Proxy_SimpleStorage_Harness();
@@ -164,13 +126,7 @@ contract ProxyAdmin_GetProxyImplementation_Test is ProxyAdmin_TestInit {
         getProxyImplementation(payable(proxy));
     }
 
-    function test_getProxyImplementation_chugsplash_succeeds() external {
-        getProxyImplementation(payable(chugsplash));
-    }
 
-    function test_getProxyImplementation_resolved_succeeds() external {
-        getProxyImplementation(payable(resolved));
-    }
 }
 
 /// @title ProxyAdmin_GetProxyAdmin_Test
@@ -185,13 +141,7 @@ contract ProxyAdmin_GetProxyAdmin_Test is ProxyAdmin_TestInit {
         getProxyAdmin(payable(proxy));
     }
 
-    function test_getProxyAdmin_chugsplash_succeeds() external view {
-        getProxyAdmin(payable(chugsplash));
-    }
 
-    function test_getProxyAdmin_resolved_succeeds() external view {
-        getProxyAdmin(payable(resolved));
-    }
 }
 
 /// @title ProxyAdmin_ChangeProxyAdmin_Test
@@ -237,13 +187,7 @@ contract ProxyAdmin_ChangeProxyAdmin_Test is ProxyAdmin_TestInit {
         changeProxyAdmin(payable(proxy));
     }
 
-    function test_changeProxyAdmin_chugsplash_succeeds() external {
-        changeProxyAdmin(payable(chugsplash));
-    }
 
-    function test_changeProxyAdmin_resolved_succeeds() external {
-        changeProxyAdmin(payable(resolved));
-    }
 }
 
 /// @title ProxyAdmin_Upgrade_Test
@@ -261,13 +205,7 @@ contract ProxyAdmin_Upgrade_Test is ProxyAdmin_TestInit {
         upgrade(payable(proxy));
     }
 
-    function test_upgrade_chugsplash_succeeds() external {
-        upgrade(payable(chugsplash));
-    }
 
-    function test_upgrade_resolved_succeeds() external {
-        upgrade(payable(resolved));
-    }
 }
 
 /// @title ProxyAdmin_UpgradeAndCall_Test
@@ -288,13 +226,7 @@ contract ProxyAdmin_UpgradeAndCall_Test is ProxyAdmin_TestInit {
         upgradeAndCall(payable(proxy));
     }
 
-    function test_chugsplashUpgradeAndCall_succeeds() external {
-        upgradeAndCall(payable(chugsplash));
-    }
 
-    function test_delegateResolvedUpgradeAndCall_succeeds() external {
-        upgradeAndCall(payable(resolved));
-    }
 }
 
 /// @title ProxyAdmin_Uncategorized_Test
@@ -307,8 +239,6 @@ contract ProxyAdmin_Uncategorized_Test is ProxyAdmin_TestInit {
 
     function test_proxyType_succeeds() external view {
         assertEq(uint256(admin.proxyType(address(proxy))), uint256(IProxyAdmin.ProxyType.ERC1967));
-        assertEq(uint256(admin.proxyType(address(chugsplash))), uint256(IProxyAdmin.ProxyType.CHUGSPLASH));
-        assertEq(uint256(admin.proxyType(address(resolved))), uint256(IProxyAdmin.ProxyType.RESOLVED));
     }
 
     function test_onlyOwner_notOwner_reverts() external {

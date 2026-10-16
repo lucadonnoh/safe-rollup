@@ -16,11 +16,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
-type DependencySet interface {
-	// Chains returns the number of chains in the dependency set
-	Chains() []eth.ChainID
-}
-
 // L1ReceiptsFetcher fetches L1 header info and receipts for the payload attributes derivation (the info tx and deposits)
 type L1ReceiptsFetcher interface {
 	InfoByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, error)
@@ -35,21 +30,16 @@ type SystemConfigL2Fetcher interface {
 type FetchingAttributesBuilder struct {
 	rollupCfg     *rollup.Config
 	l1ChainConfig *params.ChainConfig
-	depSet        DependencySet
 	l1            L1ReceiptsFetcher
 	l2            SystemConfigL2Fetcher
 	// whether to skip the L1 origin timestamp check - only for testing purposes
 	testSkipL1OriginCheck bool
 }
 
-func NewFetchingAttributesBuilder(rollupCfg *rollup.Config, l1ChainConfig *params.ChainConfig, depSet DependencySet, l1 L1ReceiptsFetcher, l2 SystemConfigL2Fetcher) *FetchingAttributesBuilder {
-	if rollupCfg.LagoonTime != nil && depSet == nil {
-		panic("FetchingAttributesBuilder requires a dependency set when Lagoon fork is scheduled")
-	}
+func NewFetchingAttributesBuilder(rollupCfg *rollup.Config, l1ChainConfig *params.ChainConfig, l1 L1ReceiptsFetcher, l2 SystemConfigL2Fetcher) *FetchingAttributesBuilder {
 	return &FetchingAttributesBuilder{
 		rollupCfg:     rollupCfg,
 		l1ChainConfig: l1ChainConfig,
-		depSet:        depSet,
 		l1:            l1,
 		l2:            l2,
 	}
@@ -169,12 +159,8 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 	}
 
 	if ba.rollupCfg.IsLagoonActivationBlock(nextL2Time) {
-		// The NUT bundle carries the fork's predeploy upgrades, so it executes on every chain
-		// activating Lagoon. The setFeature and ETHLiquidity funding wrappers are interop-specific:
-		// they additionally require the interop feature, and a multi-chain dependency set, which is
-		// what signals the L2ContractsManager to activate the Interop-gated contracts.
-		activateInteropContracts := ba.rollupCfg.IsInterop(nextL2Time) && len(ba.depSet.Chains()) > 1
-		lagoonTxs, lagoonGas, err := LagoonActivationUpgradeTransactions(activateInteropContracts)
+		// The NUT bundle carries the fork's predeploy upgrades. Interop is not supported.
+		lagoonTxs, lagoonGas, err := LagoonActivationUpgradeTransactions(false)
 		if err != nil {
 			return nil, NewCriticalError(err)
 		}

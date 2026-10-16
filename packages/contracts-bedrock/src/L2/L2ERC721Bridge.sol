@@ -10,7 +10,6 @@ import { ERC165Checker } from "@openzeppelin/contracts/utils/introspection/ERC16
 import { Predeploys } from "src/libraries/Predeploys.sol";
 
 // Interfaces
-import { IL1ERC721Bridge } from "interfaces/L1/IL1ERC721Bridge.sol";
 import { IOptimismMintableERC721 } from "interfaces/L2/IOptimismMintableERC721.sol";
 import { ICrossDomainMessenger } from "interfaces/universal/ICrossDomainMessenger.sol";
 import { ISemver } from "interfaces/universal/ISemver.sol";
@@ -117,8 +116,14 @@ contract L2ERC721Bridge is ProxyAdminOwnedBase, ERC721Bridge, ISemver {
         // slither-disable-next-line reentrancy-events
         IOptimismMintableERC721(_localToken).burn(_from, _tokenId);
 
-        bytes memory message = abi.encodeCall(
-            IL1ERC721Bridge.finalizeBridgeERC721, (remoteToken, _localToken, _from, _to, _tokenId, _extraData)
+        bytes memory message = abi.encodeWithSignature(
+            "finalizeBridgeERC721(address,address,address,address,uint256,bytes)",
+            remoteToken,
+            _localToken,
+            _from,
+            _to,
+            _tokenId,
+            _extraData
         );
 
         // Send message to L1 bridge

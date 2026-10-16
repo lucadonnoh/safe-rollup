@@ -35,19 +35,16 @@ func NewDriver(
 	driverCfg *Config,
 	cfg *rollup.Config,
 	l1ChainConfig *params.ChainConfig,
-	depSet derive.DependencySet,
 	l2 L2Chain,
 	l1 L1Chain,
 	upstreamFollowSource UpstreamFollowSource,
-	l1Blobs derive.L1BlobsFetcher,
 	network Network,
 	log log.Logger,
 	metrics Metrics,
 	sequencerStateListener sequencing.SequencerStateListener,
-	safeHeadListener rollup.SafeHeadListener,
 	syncCfg *sync.Config,
 	sequencerConductor conductor.SequencerConductor,
-	altDA AltDAIface,
+	altDA derive.AltDAInputFetcher,
 	superAuthority rollup.SuperAuthority,
 ) *Driver {
 	driverCtx, driverCancel := context.WithCancel(context.Background())
@@ -64,18 +61,13 @@ func NewDriver(
 	// TODO(#17115): Refactor dependency cycles
 	ec.SetCrossUpdateHandler(statusTracker)
 
-	var finalizer Finalizer
-	if cfg.AltDAEnabled() {
-		finalizer = finality.NewAltDAFinalizer(driverCtx, log, cfg, driverCfg.Finalizer, l1, altDA, ec)
-	} else {
-		finalizer = finality.NewFinalizer(driverCtx, log, cfg, driverCfg.Finalizer, l1, ec)
-	}
+	finalizer := finality.NewFinalizer(driverCtx, log, cfg, driverCfg.Finalizer, l1, ec)
 	sys.Register("finalizer", finalizer)
 
 	attrHandler := attributes.NewAttributesHandler(log, cfg, driverCtx, l2, ec)
 	sys.Register("attributes-handler", attrHandler)
 
-	derivationPipeline := derive.NewDerivationPipeline(log, cfg, depSet, verifConfDepth, l1Blobs, altDA, l2, metrics, l1ChainConfig)
+	derivationPipeline := derive.NewDerivationPipeline(log, cfg, verifConfDepth, altDA, l2, metrics, l1ChainConfig)
 
 	pipelineDeriver := derive.NewPipelineDeriver(driverCtx, derivationPipeline)
 	sys.Register("pipeline", pipelineDeriver)
@@ -88,26 +80,24 @@ func NewDriver(
 	sys.Register("step-scheduler", schedDeriv)
 
 	syncDeriver := &SyncDeriver{
-		Derivation:     derivationPipeline,
-		SafeHeadNotifs: safeHeadListener,
-		Engine:         ec,
-		SyncCfg:        syncCfg,
-		Config:         cfg,
-		L1:             l1,
-		L1Tracker:      l1Tracker,
-		L2:             l2,
-		Log:            log,
-		Ctx:            driverCtx,
-		StepDeriver:    schedDeriv,
+		Derivation:  derivationPipeline,
+		Engine:      ec,
+		SyncCfg:     syncCfg,
+		Config:      cfg,
+		L1:          l1,
+		L1Tracker:   l1Tracker,
+		L2:          l2,
+		Log:         log,
+		Ctx:         driverCtx,
+		StepDeriver: schedDeriv,
 	}
-	ec.SyncDeriver = syncDeriver
 	sys.Register("sync", syncDeriver)
 	sys.Register("engine", ec)
 
 	var sequencer sequencing.SequencerIface
 	if driverCfg.SequencerEnabled {
 		asyncGossiper := async.NewAsyncGossiper(driverCtx, network, log, metrics)
-		attrBuilder := derive.NewFetchingAttributesBuilder(cfg, l1ChainConfig, depSet, l1, l2)
+		attrBuilder := derive.NewFetchingAttributesBuilder(cfg, l1ChainConfig, l1, l2)
 		sequencerConfDepth := confdepth.NewConfDepth(driverCfg.SequencerConfDepth, statusTracker.L1Head, l1)
 		findL1Origin := sequencing.NewL1OriginSelector(driverCtx, log, cfg, sequencerConfDepth)
 		sys.Register("origin-selector", findL1Origin)
@@ -371,14 +361,6 @@ func (s *Driver) StopSequencer(ctx context.Context) (common.Hash, error) {
 
 func (s *Driver) SequencerActive(ctx context.Context) (bool, error) {
 	return s.sequencer.Active(), nil
-}
-
-func (s *Driver) OverrideLeader(ctx context.Context) error {
-	return s.sequencer.OverrideLeader(ctx)
-}
-
-func (s *Driver) ConductorEnabled(ctx context.Context) (bool, error) {
-	return s.sequencer.ConductorEnabled(ctx), nil
 }
 
 func (s *Driver) SetRecoverMode(ctx context.Context, mode bool) error {

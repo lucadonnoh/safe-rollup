@@ -7,7 +7,6 @@ import (
 	"time"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
-	"github.com/ethereum-optimism/optimism/op-core/interop/depset"
 	"github.com/ethereum-optimism/optimism/op-node/flags"
 	"github.com/ethereum-optimism/optimism/op-node/node/tracer"
 	"github.com/ethereum-optimism/optimism/op-node/p2p"
@@ -25,15 +24,11 @@ type Config struct {
 	L1 L1EndpointSetup
 	L2 L2EndpointSetup
 
-	Beacon L1BeaconEndpointSetup
-
 	Driver driver.Config
 
 	Rollup rollup.Config
 
 	L1ChainConfig *params.ChainConfig
-
-	DependencySet depset.DependencySet
 
 	// P2PSigner will be used for signing off on published content
 	// if the node is sequencing and if the p2p stack is enabled
@@ -53,7 +48,6 @@ type Config struct {
 	ConfigPersistence ConfigPersistence
 
 	// Path to store safe head database. Disabled when set to empty string
-	SafeDBPath string
 
 	// RuntimeConfigReloadInterval defines the interval between runtime config reloads.
 	// Disabled if <= 0.
@@ -72,23 +66,12 @@ type Config struct {
 	// Cancel to request a premature shutdown of the node itself. This may be nil.
 	Cancel context.CancelCauseFunc
 
-	// Conductor is used to determine this node is the leader sequencer.
-	ConductorEnabled    bool
-	ConductorRpc        ConductorRPCFunc
-	ConductorRpcTimeout time.Duration
-
 	// AltDA config
 	AltDA altda.CLIConfig
 
 	IgnoreMissingPectraBlobSchedule bool
 	FetchWithdrawalRootFromState    bool
-
-	// Experimental. Enables new opstack RPC namespace. Used by op-test-sequencer.
-	ExperimentalOPStackAPI bool
 }
-
-// ConductorRPCFunc retrieves the endpoint. The RPC may not immediately be available.
-type ConductorRPCFunc func(ctx context.Context) (string, error)
 
 func (cfg *Config) LoadPersisted(log log.Logger) error {
 	if !cfg.Driver.SequencerEnabled {
@@ -121,14 +104,6 @@ func (cfg *Config) Check() error {
 	if cfg.L1ChainConfig == nil {
 		return fmt.Errorf("missing L1ChainConfig")
 	}
-	if cfg.Rollup.EcotoneTime != nil {
-		if cfg.Beacon == nil {
-			return fmt.Errorf("the Ecotone upgrade is scheduled (timestamp = %d) but no L1 Beacon API endpoint is configured", *cfg.Rollup.EcotoneTime)
-		}
-		if err := cfg.Beacon.Check(); err != nil {
-			return fmt.Errorf("misconfigured L1 Beacon API endpoint: %w", err)
-		}
-	}
 	if err := cfg.Rollup.Check(); err != nil {
 		return fmt.Errorf("rollup config error: %w", err)
 	}
@@ -139,9 +114,6 @@ func (cfg *Config) Check() error {
 			"'--ignore-missing-pectra-blob-schedule' flag or 'IGNORE_MISSING_PECTRA_BLOB_SCHEDULE' env var.")
 		return ErrMissingPectraBlobSchedule
 	}
-	if cfg.Rollup.LagoonTime != nil && cfg.DependencySet == nil {
-		return fmt.Errorf("the Lagoon upgrade is scheduled (timestamp = %d) but not dependency set is configured", *cfg.Rollup.LagoonTime)
-	}
 	if err := cfg.Metrics.Check(); err != nil {
 		return fmt.Errorf("metrics config error: %w", err)
 	}
@@ -151,14 +123,6 @@ func (cfg *Config) Check() error {
 	if cfg.P2P != nil {
 		if err := cfg.P2P.Check(); err != nil {
 			return fmt.Errorf("p2p config error: %w", err)
-		}
-	}
-	if cfg.ConductorEnabled {
-		if state, _ := cfg.ConfigPersistence.SequencerState(); state != StateUnset {
-			return fmt.Errorf("config persistence must be disabled when conductor is enabled")
-		}
-		if !cfg.Driver.SequencerEnabled {
-			return fmt.Errorf("sequencer must be enabled when conductor is enabled")
 		}
 	}
 	if err := cfg.AltDA.Check(); err != nil {

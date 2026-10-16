@@ -1,1 +1,0 @@
-../../../docs/ai/kona-sp1-proof-limits.md

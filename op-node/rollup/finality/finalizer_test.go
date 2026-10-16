@@ -532,35 +532,12 @@ func TestFinalizerConfig(t *testing.T) {
 		require.Equal(t, uint64(finalityDelay), fi.finalityDelay, "should use default finality delay when config fields are nil")
 	})
 
-	t.Run("uses alt-da lookback when configured", func(t *testing.T) {
+	t.Run("custom lookback overrides default", func(t *testing.T) {
 		logger := testlog.Logger(t, log.LevelError)
 		l1F := &testutils.MockL1Source{}
 		ec := new(fakeEngineController)
 
-		cfg := &rollup.Config{
-			AltDAConfig: &rollup.AltDAConfig{
-				DAChallengeWindow: 90,
-				DAResolveWindow:   90,
-			},
-		}
-
-		fi := NewFinalizer(context.Background(), logger, cfg, nil, l1F, ec)
-
-		expectedLookback := uint64(181) // 90 + 90 + 1
-		require.Equal(t, expectedLookback, fi.finalityLookback, "should use alt-da calculated lookback")
-	})
-
-	t.Run("custom lookback overrides alt-da calculation", func(t *testing.T) {
-		logger := testlog.Logger(t, log.LevelError)
-		l1F := &testutils.MockL1Source{}
-		ec := new(fakeEngineController)
-
-		cfg := &rollup.Config{
-			AltDAConfig: &rollup.AltDAConfig{
-				DAChallengeWindow: 90,
-				DAResolveWindow:   90,
-			},
-		}
+		cfg := &rollup.Config{}
 
 		customLookback := uint64(300)
 		finalizerCfg := &Config{
@@ -569,6 +546,16 @@ func TestFinalizerConfig(t *testing.T) {
 
 		fi := NewFinalizer(context.Background(), logger, cfg, finalizerCfg, l1F, ec)
 
-		require.Equal(t, customLookback, fi.finalityLookback, "custom lookback should override alt-da calculation")
+		require.Equal(t, customLookback, fi.finalityLookback, "custom lookback should override the default")
 	})
+}
+
+type fakeEngineController struct {
+	finalizedL2 eth.L2BlockRef
+}
+
+var _ EngineController = (*fakeEngineController)(nil)
+
+func (f *fakeEngineController) PromoteFinalized(_ context.Context, ref eth.L2BlockRef) {
+	f.finalizedL2 = ref
 }

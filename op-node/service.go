@@ -1,7 +1,6 @@
 package opnode
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,9 +11,6 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
-	"github.com/ethereum-optimism/optimism/op-core/interop/depset"
-	registry "github.com/ethereum-optimism/optimism/op-core/superchain"
-	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
 	"github.com/ethereum-optimism/optimism/op-node/config"
 	"github.com/ethereum-optimism/optimism/op-node/flags"
 	p2pcli "github.com/ethereum-optimism/optimism/op-node/p2p/cli"
@@ -23,7 +19,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/engine"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/finality"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
-	"github.com/ethereum-optimism/optimism/op-node/superchain"
 	"github.com/ethereum-optimism/optimism/op-service/cliiface"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	opflags "github.com/ethereum-optimism/optimism/op-service/flags"
@@ -47,11 +42,6 @@ func NewConfig(ctx cliiface.Context, log log.Logger) (*config.Config, error) {
 	}
 
 	l1ChainConfig, err := NewL1ChainConfig(rollupConfig.L1ChainID, ctx, log)
-	if err != nil {
-		return nil, err
-	}
-
-	depSet, err := NewDependencySetFromCLI(ctx, eth.ChainIDFromBig(rollupConfig.L2ChainID))
 	if err != nil {
 		return nil, err
 	}
@@ -87,15 +77,12 @@ func NewConfig(ctx cliiface.Context, log log.Logger) (*config.Config, error) {
 		ctx.IsSet(flags.HeartbeatURLFlag.Name) {
 		log.Warn("Heartbeat functionality is not supported anymore, CLI flags will be removed in following release.")
 	}
-	conductorRPCEndpoint := ctx.String(flags.ConductorRpcFlag.Name)
 	cfg := &config.Config{
 		L1:                          l1Endpoint,
 		L2:                          l2Endpoint,
 		L1ChainConfig:               l1ChainConfig,
 		Rollup:                      *rollupConfig,
-		DependencySet:               depSet,
 		Driver:                      *driverConfig,
-		Beacon:                      NewBeaconEndpointConfig(ctx),
 		RPC:                         rpc.ReadCLIConfig(ctx),
 		Metrics:                     opmetrics.ReadCLIConfig(ctx),
 		Pprof:                       oppprof.ReadCLIConfig(ctx),
@@ -104,48 +91,23 @@ func NewConfig(ctx cliiface.Context, log log.Logger) (*config.Config, error) {
 		L1EpochPollInterval:         ctx.Duration(flags.L1EpochPollIntervalFlag.Name),
 		RuntimeConfigReloadInterval: ctx.Duration(flags.RuntimeConfigReloadIntervalFlag.Name),
 		ConfigPersistence:           configPersistence,
-		SafeDBPath:                  ctx.String(flags.SafeDBPath.Name),
 		Sync:                        *syncConfig,
 		L2FollowSource:              NewL2FollowSourceConfig(ctx),
-
-		ConductorEnabled: ctx.Bool(flags.ConductorEnabledFlag.Name),
-		ConductorRpc: func(context.Context) (string, error) {
-			return conductorRPCEndpoint, nil
-		},
-		ConductorRpcTimeout: ctx.Duration(flags.ConductorRpcTimeoutFlag.Name),
 
 		AltDA: altda.ReadCLIConfig(ctx),
 
 		IgnoreMissingPectraBlobSchedule: ctx.Bool(flags.IgnoreMissingPectraBlobSchedule.Name),
 		FetchWithdrawalRootFromState:    ctx.Bool(flags.FetchWithdrawalRootFromState.Name),
-
-		ExperimentalOPStackAPI: ctx.Bool(flags.ExperimentalOPStackAPI.Name),
 	}
 
 	if err := cfg.LoadPersisted(log); err != nil {
 		return nil, fmt.Errorf("failed to load driver config: %w", err)
 	}
 
-	// conductor controls the sequencer state
-	if cfg.ConductorEnabled {
-		cfg.Driver.SequencerStopped = true
-	}
-
 	if err := cfg.Check(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
-}
-
-func NewBeaconEndpointConfig(ctx cliiface.Context) config.L1BeaconEndpointSetup {
-	return &config.L1BeaconEndpointConfig{
-		BeaconAddr:                 ctx.String(flags.BeaconAddr.Name),
-		BeaconHeader:               ctx.String(flags.BeaconHeader.Name),
-		BeaconFallbackAddrs:        ctx.StringSlice(flags.BeaconFallbackAddrs.Name),
-		BeaconCheckIgnore:          ctx.Bool(flags.BeaconCheckIgnore.Name),
-		BeaconFetchAllSidecars:     ctx.Bool(flags.BeaconFetchAllSidecars.Name),
-		BeaconSlotDurationOverride: ctx.Uint64(flags.BeaconSlotDurationOverride.Name),
-	}
 }
 
 func NewL1EndpointConfig(ctx cliiface.Context) *config.L1EndpointConfig {
@@ -220,12 +182,7 @@ func NewDriverConfig(ctx cliiface.Context) *driver.Config {
 }
 
 func NewRollupConfigFromCLI(log log.Logger, ctx cliiface.Context) (*rollup.Config, error) {
-	network := ctx.String(opflags.NetworkFlagName)
-	rollupConfigPath := ctx.String(opflags.RollupConfigFlagName)
-	if ctx.Bool(flags.BetaExtraNetworks.Name) {
-		log.Warn("The beta.extra-networks flag is deprecated and can be omitted safely.")
-	}
-	rollupConfig, err := NewRollupConfig(log, network, rollupConfigPath)
+	rollupConfig, err := NewRollupConfig(ctx.String(opflags.RollupConfigFlagName))
 	if err != nil {
 		return nil, err
 	}
@@ -233,21 +190,7 @@ func NewRollupConfigFromCLI(log log.Logger, ctx cliiface.Context) (*rollup.Confi
 	return rollupConfig, nil
 }
 
-func NewRollupConfig(log log.Logger, network string, rollupConfigPath string) (*rollup.Config, error) {
-	if network != "" {
-		if rollupConfigPath != "" {
-			log.Error(`Cannot configure network and rollup-config at the same time.
-Startup will proceed to use the network-parameter and ignore the rollup config.
-Conflicting configuration is deprecated, and will stop the op-node from starting in the future.
-`, "network", network, "rollup_config", rollupConfigPath)
-		}
-		rollupConfig, err := chaincfg.GetRollupConfig(network)
-		if err != nil {
-			return nil, err
-		}
-		return rollupConfig, nil
-	}
-
+func NewRollupConfig(rollupConfigPath string) (*rollup.Config, error) {
 	file, err := os.Open(rollupConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read rollup config: %w", err)
@@ -314,24 +257,6 @@ func NewL1ChainConfigFromCLI(log log.Logger, ctx cliiface.Context) (*params.Chai
 	// If that fails, try to load the config from the .config property.
 	// This should work if the provided file is a genesis file / chainspec
 	return jsonutil.LoadJSONFieldStrict[params.ChainConfig](l1ChainConfigPath, "config")
-}
-
-// NewDependencySetFromCLI returns the dep set from --interop.dependency-set if
-// set, otherwise from the superchain-registry. An unknown chain yields
-// (nil, nil); config.Check then errors iff LagoonTime is set.
-func NewDependencySetFromCLI(cli cliiface.Context, chainID eth.ChainID) (depset.DependencySet, error) {
-	if cli.IsSet(flags.InteropDependencySet.Name) {
-		loader := &depset.JSONDependencySetLoader{Path: cli.Path(flags.InteropDependencySet.Name)}
-		return loader.LoadDependencySet()
-	}
-	ds, err := superchain.LoadDependencySet(chainID)
-	if err != nil {
-		if errors.Is(err, registry.ErrUnknownChain) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("load dependency set from superchain-registry: %w", err)
-	}
-	return ds, nil
 }
 
 func NewSyncConfig(ctx cliiface.Context, log log.Logger) (*sync.Config, error) {

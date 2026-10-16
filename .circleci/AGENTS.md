@@ -1,1 +1,0 @@
-../docs/ai/ci-config-review.md

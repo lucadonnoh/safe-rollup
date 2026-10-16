@@ -72,9 +72,7 @@ func TestDeprecatedFlagsAreHidden(t *testing.T) {
 
 func TestHasEnvVar(t *testing.T) {
 	// known exceptions to the number of env vars
-	expEnvVars := map[string]int{
-		BeaconFallbackAddrs.Name: 2,
-	}
+	expEnvVars := map[string]int{}
 
 	for _, flag := range Flags {
 		flag := flag

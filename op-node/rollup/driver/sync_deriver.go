@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ethereum-optimism/optimism/op-node/node/safedb"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/engine"
@@ -20,8 +19,6 @@ type SyncDeriver struct {
 	// The derivation pipeline is reset whenever we reorg.
 	// The derivation pipeline determines the new l2Safe.
 	Derivation DerivationPipeline
-
-	SafeHeadNotifs rollup.SafeHeadListener // notified when safe head is updated
 
 	// The engine controller is used by the sequencer & Derivation components.
 	// We will also use it for EL sync in a future PR.
@@ -85,8 +82,6 @@ func (s *SyncDeriver) OnEvent(ctx context.Context, ev event.Event) bool {
 		// If there is more data to process,
 		// continue derivation quickly
 		s.StepDeriver.RequestStep(ctx, true)
-	case engine.SafeDerivedEvent:
-		s.onSafeDerivedBlock(ctx, x)
 	default:
 		return false
 	}
@@ -115,111 +110,7 @@ func (s *SyncDeriver) OnUnsafeL2Payload(ctx context.Context, envelope *eth.Execu
 	}
 }
 
-func (s *SyncDeriver) onSafeDerivedBlock(ctx context.Context, x engine.SafeDerivedEvent) {
-	if s.SafeHeadNotifs != nil && s.SafeHeadNotifs.Enabled() {
-		if err := s.SafeHeadNotifs.SafeHeadUpdated(x.Safe, x.Source.ID()); err != nil {
-			// At this point our state is in a potentially inconsistent state as we've updated the safe head
-			// in the execution client but failed to post process it. Reset the pipeline so the safe head rolls back
-			// a little (it always rolls back at least 1 block) and then it will retry storing the entry
-			s.Emitter.Emit(ctx, rollup.ResetEvent{
-				Err: fmt.Errorf("safe head notifications failed: %w", err),
-			})
-		}
-	}
-}
-
-// ResetSafeDB removes safedb entries at or above ref, keeping the contiguous history below
-// it. Called after EL sync when the recorded safedb tip is not part of the synced chain
-// (e.g. a recent reorg dropped it): trimming to the offset-derived head re-derives only the
-// recent window rather than discarding the whole db. Passing a zero ref clears it entirely.
-func (s *SyncDeriver) ResetSafeDB(ref eth.L2BlockRef) {
-	if s.SafeHeadNotifs != nil {
-		if err := s.SafeHeadNotifs.SafeHeadReset(ref); err != nil {
-			s.Log.Error("Failed to reset safe head db", "err", err)
-		}
-	}
-}
-
-// safeDBReader is the read subset of the safedb used at EL-sync completion.
-// A listener that doesn't implement it is treated as having no safedb.
-type safeDBReader interface {
-	LastEntry(ctx context.Context) (l1, l2 eth.BlockID, err error)
-	L1AtSafeHead(ctx context.Context, targetL2Num uint64) (l1, safeHead eth.BlockID, err error)
-}
-
-func (s *SyncDeriver) safeDBReader() (safeDBReader, bool) {
-	if s.SafeHeadNotifs == nil || !s.SafeHeadNotifs.Enabled() {
-		return nil, false
-	}
-	reader, ok := s.SafeHeadNotifs.(safeDBReader)
-	return reader, ok
-}
-
-// SafeDBTip returns the L2 safe head at the safedb tip, reporting ok=false when the
-// safedb is disabled or empty. Used at EL-sync completion to resume derivation from
-// the safedb tip instead of wiping it.
-func (s *SyncDeriver) SafeDBTip(ctx context.Context) (l2 eth.BlockID, ok bool, err error) {
-	reader, isReader := s.safeDBReader()
-	if !isReader {
-		return eth.BlockID{}, false, nil
-	}
-	_, l2, err = reader.LastEntry(ctx)
-	if errors.Is(err, safedb.ErrNotFound) {
-		return eth.BlockID{}, false, nil
-	}
-	if err != nil {
-		return eth.BlockID{}, false, err
-	}
-	return l2, true, nil
-}
-
-// SafeDBHeadAtOrAboveL2 returns the L2 safe head the safedb recorded at the first L1 source whose
-// safe head reached at least l2Num, reporting ok=false when the safedb is disabled or has no such
-// entry. Unlike SafeDBTip this returns an actual recorded safe head near the offset, so the caller
-// can check a real stored block hash for canonicity.
-func (s *SyncDeriver) SafeDBHeadAtOrAboveL2(ctx context.Context, l2Num uint64) (l2 eth.BlockID, ok bool, err error) {
-	reader, isReader := s.safeDBReader()
-	if !isReader {
-		return eth.BlockID{}, false, nil
-	}
-	_, l2, err = reader.L1AtSafeHead(ctx, l2Num)
-	if errors.Is(err, safedb.ErrL1AtSafeHeadNotFound) || errors.Is(err, safedb.ErrL1AtSafeHeadUnavailable) {
-		return eth.BlockID{}, false, nil
-	}
-	if err != nil {
-		return eth.BlockID{}, false, err
-	}
-	return l2, true, nil
-}
-
 func (s *SyncDeriver) onEngineConfirmedReset(ctx context.Context, x engine.EngineResetConfirmedEvent) {
-	// If the listener update fails, we return,
-	// and don't confirm the engine-reset with the derivation pipeline.
-	// The pipeline will re-trigger a reset as necessary.
-	if s.SafeHeadNotifs != nil {
-		// The safedb records local-safe heads, and derivation resumes from
-		// local-safe, so that is where it must truncate to.
-		if err := s.SafeHeadNotifs.SafeHeadReset(x.LocalSafe); err != nil {
-			s.Log.Error("Failed to warn safe-head notifier of safe-head reset", "safe", x.LocalSafe)
-			return
-		}
-		if s.SafeHeadNotifs.Enabled() && x.LocalSafe.ID() == s.Config.Genesis.L2 {
-			// The rollup genesis block is always safe by definition. So if the pipeline resets this far back we know
-			// we will process all safe head updates and can record genesis as always safe from L1 genesis.
-			// Note that it is not safe to use cfg.Genesis.L1 here as it is the block immediately before the L2 genesis
-			// but the contracts may have been deployed earlier than that, allowing creating a dispute game
-			// with a L1 head prior to cfg.Genesis.L1
-			l1Genesis, err := s.L1.L1BlockRefByNumber(s.Ctx, 0)
-			if err != nil {
-				s.Log.Error("Failed to retrieve L1 genesis, cannot notify genesis as safe block", "err", err)
-				return
-			}
-			if err := s.SafeHeadNotifs.SafeHeadUpdated(x.LocalSafe, l1Genesis.ID()); err != nil {
-				s.Log.Error("Failed to notify safe-head listener of safe-head", "err", err)
-				return
-			}
-		}
-	}
 	s.Log.Info("Confirming pipeline reset")
 	s.Emitter.Emit(ctx, derive.ConfirmPipelineResetEvent{})
 }

@@ -71,52 +71,7 @@ var (
 		Destination: new(string),
 		Category:    RollupCategory,
 	}
-	BeaconAddr = &cli.StringFlag{
-		Name:     "l1.beacon",
-		Usage:    "Address of L1 Beacon-node HTTP endpoint to use.",
-		Required: false,
-		EnvVars:  prefixEnvVars("L1_BEACON"),
-		Category: RollupCategory,
-	}
 	/* Optional Flags */
-	BeaconHeader = &cli.StringFlag{
-		Name:     "l1.beacon-header",
-		Usage:    "Optional HTTP header to add to all requests to the L1 Beacon endpoint. Format: 'X-Key: Value'",
-		Required: false,
-		EnvVars:  prefixEnvVars("L1_BEACON_HEADER"),
-		Category: L1RPCCategory,
-	}
-	BeaconFallbackAddrs = &cli.StringSliceFlag{
-		Name:     "l1.beacon-fallbacks",
-		Aliases:  []string{"l1.beacon-archiver"},
-		Usage:    "Addresses of L1 Beacon-API compatible HTTP fallback endpoints. Used to fetch blob sidecars not available at the l1.beacon (e.g. expired blobs).",
-		EnvVars:  prefixEnvVars("L1_BEACON_FALLBACKS", "L1_BEACON_ARCHIVER"),
-		Category: L1RPCCategory,
-	}
-	BeaconCheckIgnore = &cli.BoolFlag{
-		Name:     "l1.beacon.ignore",
-		Usage:    "When false, halts op-node startup if the healthcheck to the Beacon-node endpoint fails.",
-		Required: false,
-		Value:    false,
-		EnvVars:  prefixEnvVars("L1_BEACON_IGNORE"),
-		Category: L1RPCCategory,
-	}
-	BeaconFetchAllSidecars = &cli.BoolFlag{
-		Name:     "l1.beacon.fetch-all-sidecars",
-		Usage:    "If true, all sidecars are fetched and filtered locally. Workaround for buggy Beacon nodes.",
-		Required: false,
-		Value:    false,
-		EnvVars:  prefixEnvVars("L1_BEACON_FETCH_ALL_SIDECARS"),
-		Category: L1RPCCategory,
-	}
-	BeaconSlotDurationOverride = &cli.Uint64Flag{
-		Name:     "l1.beacon.slot-duration-override",
-		Usage:    "Duration in seconds of an L1 slot. When set (non-zero), bypasses the beacon /eth/v1/config/spec fetch and uses this value as SECONDS_PER_SLOT. Useful for devnets where the beacon spec endpoint is unavailable (e.g. anvil).",
-		Required: false,
-		Value:    0,
-		EnvVars:  prefixEnvVars("L1_BEACON_SLOT_DURATION_OVERRIDE"),
-		Category: L1RPCCategory,
-	}
 	SyncModeFlag = &cli.GenericFlag{
 		Name:     "syncmode",
 		Usage:    fmt.Sprintf("Blockchain sync mode (options: %s)", openum.EnumString(sync.ModeStrings)),
@@ -352,12 +307,6 @@ var (
 		Category: OperationsCategory,
 		Hidden:   true,
 	}
-	SafeDBPath = &cli.StringFlag{
-		Name:     "safedb.path",
-		Usage:    "File path used to persist safe head update data. Disabled if not set.",
-		EnvVars:  prefixEnvVars("SAFEDB_PATH"),
-		Category: OperationsCategory,
-	}
 	/* Deprecated Flags */
 	L2EngineSyncEnabled = &cli.BoolFlag{
 		Name:    "l2.engine-sync",
@@ -374,12 +323,6 @@ var (
 		Value:   false,
 		Hidden:  true,
 	}
-	BetaExtraNetworks = &cli.BoolFlag{
-		Name:    "beta.extra-networks",
-		Usage:   "Legacy flag, ignored, all superchain-registry networks are enabled by default.",
-		EnvVars: prefixEnvVars("BETA_EXTRA_NETWORKS"),
-		Hidden:  true, // hidden, this is deprecated, the flag is not used anymore.
-	}
 	BackupL2UnsafeSyncRPC = &cli.StringFlag{
 		Name:    "l2.backup-unsafe-sync-rpc",
 		Usage:   "Set the backup L2 unsafe sync RPC endpoint.",
@@ -393,35 +336,7 @@ var (
 		EnvVars: prefixEnvVars("L2_BACKUP_UNSAFE_SYNC_RPC_TRUST_RPC"),
 		Hidden:  true,
 	}
-	ConductorEnabledFlag = &cli.BoolFlag{
-		Name:     "conductor.enabled",
-		Usage:    "Enable the conductor service",
-		EnvVars:  prefixEnvVars("CONDUCTOR_ENABLED"),
-		Value:    false,
-		Category: SequencerCategory,
-	}
-	ConductorRpcFlag = &cli.StringFlag{
-		Name:     "conductor.rpc",
-		Usage:    "Conductor service rpc endpoint",
-		EnvVars:  prefixEnvVars("CONDUCTOR_RPC"),
-		Value:    "http://127.0.0.1:8547",
-		Category: SequencerCategory,
-	}
-	ConductorRpcTimeoutFlag = &cli.DurationFlag{
-		Name:     "conductor.rpc-timeout",
-		Usage:    "Conductor service rpc timeout",
-		EnvVars:  prefixEnvVars("CONDUCTOR_RPC_TIMEOUT"),
-		Value:    time.Second * 1,
-		Category: SequencerCategory,
-	}
 	/* Interop flags, experimental. */
-	InteropDependencySet = &cli.PathFlag{
-		Name:      "interop.dependency-set",
-		Usage:     "Dependency-set configuration, point at JSON file.",
-		EnvVars:   prefixEnvVars("INTEROP_DEPENDENCY_SET"),
-		TakesFile: true,
-		Category:  InteropCategory,
-	}
 
 	IgnoreMissingPectraBlobSchedule = &cli.BoolFlag{
 		Name: "ignore-missing-pectra-blob-schedule",
@@ -432,14 +347,6 @@ var (
 		Category: RollupCategory,
 		Hidden:   true,
 	}
-
-	ExperimentalOPStackAPI = &cli.BoolFlag{
-		Name:     "experimental.sequencer-api",
-		Usage:    "Enables experimental test sequencer RPC functionality",
-		Required: false,
-		EnvVars:  prefixEnvVars("EXPERIMENTAL_SEQUENCER_API"),
-		Category: MiscCategory,
-	}
 )
 
 var requiredFlags = []cli.Flag{
@@ -449,12 +356,6 @@ var requiredFlags = []cli.Flag{
 }
 
 var optionalFlags = []cli.Flag{
-	BeaconAddr,
-	BeaconHeader,
-	BeaconFallbackAddrs,
-	BeaconCheckIgnore,
-	BeaconFetchAllSidecars,
-	BeaconSlotDurationOverride,
 	SyncModeFlag,
 	SyncModeOffsetELSafeFlag,
 	FetchWithdrawalRootFromState,
@@ -481,24 +382,17 @@ var optionalFlags = []cli.Flag{
 	HeartbeatEnabledFlag,
 	HeartbeatMonikerFlag,
 	HeartbeatURLFlag,
-	ConductorEnabledFlag,
-	ConductorRpcFlag,
-	ConductorRpcTimeoutFlag,
-	SafeDBPath,
 	L1ChainConfig,
 	L2EngineKind,
 	L2EngineRpcTimeout,
 	L2FollowSource,
 	L2FollowSourceRpcTimeout,
-	InteropDependencySet,
 	IgnoreMissingPectraBlobSchedule,
-	ExperimentalOPStackAPI,
 }
 
 var DeprecatedFlags = []cli.Flag{
 	L2EngineSyncEnabled,
 	SkipSyncStartCheck,
-	BetaExtraNetworks,
 	BackupL2UnsafeSyncRPC,
 	BackupL2UnsafeSyncRPCTrustRPC,
 	SyncModeReqRespFlag,

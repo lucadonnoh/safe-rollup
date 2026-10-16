@@ -45,23 +45,13 @@ type Config struct {
 	FinalityDelay *uint64
 }
 
-// calcFinalityLookback calculates the default finality lookback based on DA challenge window if altDA
-// mode is activated or L1 finality lookback.
+// calcFinalityLookback returns the configured finality lookback or the default one.
 func calcFinalityLookback(cfg *rollup.Config, finalizerCfg *Config) uint64 {
 	// If a custom finality lookback is configured, use it as an override
 	if finalizerCfg != nil && finalizerCfg.FinalityLookback != nil {
 		return *finalizerCfg.FinalityLookback
 	}
 
-	// in alt-da mode the longest finality lookback is a commitment is challenged on the last block of
-	// the challenge window in which case it will be both challenge + resolve window.
-	if cfg.AltDAEnabled() {
-		lkb := cfg.AltDAConfig.DAChallengeWindow + cfg.AltDAConfig.DAResolveWindow + 1
-		// in the case only if the altDA windows are longer than the default finality lookback
-		if lkb > defaultFinalityLookback {
-			return lkb
-		}
-	}
 	return defaultFinalityLookback
 }
 

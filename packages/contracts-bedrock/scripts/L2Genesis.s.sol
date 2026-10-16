@@ -24,7 +24,6 @@ import { IGovernanceToken } from "interfaces/governance/IGovernanceToken.sol";
 import { IOptimismMintableERC20Factory } from "interfaces/universal/IOptimismMintableERC20Factory.sol";
 import { IL2StandardBridge } from "interfaces/L2/IL2StandardBridge.sol";
 import { IL2ERC721Bridge } from "interfaces/L2/IL2ERC721Bridge.sol";
-import { IL2ToL2CrossDomainMessenger } from "interfaces/L2/IL2ToL2CrossDomainMessenger.sol";
 import { IStandardBridge } from "interfaces/universal/IStandardBridge.sol";
 import { IERC721Bridge } from "interfaces/universal/IERC721Bridge.sol";
 import { ICrossDomainMessenger } from "interfaces/universal/ICrossDomainMessenger.sol";
@@ -70,13 +69,11 @@ contract L2Genesis is Script {
         bool enableGovernance;
         bool fundDevAccounts;
         bool useCustomGasToken;
-        bool useInterop;
         string gasPayingTokenName;
         string gasPayingTokenSymbol;
         uint256 nativeAssetLiquidityAmount;
         address liquidityControllerOwner;
         bytes32 devFeatureBitmap;
-        uint256 l2ToL2MessageExpiryPeriod;
     }
 
     using ForkUtils for Fork;
@@ -129,17 +126,6 @@ contract L2Genesis is Script {
 
     /// @notice Alias for `runWithStateDump` so that no `--sig` needs to be specified.
     function run(Input memory _input) public {
-        require(
-            _input.useInterop
-                == DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP),
-            "L2Genesis: useInterop and OPTIMISM_PORTAL_INTEROP devFeature bit must agree"
-        );
-        // The messenger only takes a non-production expiry period when interop is active at
-        // genesis; a later activation initializes it with the production period.
-        require(
-            _input.l2ToL2MessageExpiryPeriod == 0 || _isGenesisInteropEnabled(_input),
-            "L2Genesis: expiry period override needs interop at genesis"
-        );
         address deployer = makeAddr("deployer");
         vm.startPrank(deployer);
         vm.chainId(_input.l2ChainID);
@@ -241,7 +227,7 @@ contract L2Genesis is Script {
             EIP1967Helper.setAdmin(addr, Predeploys.PROXY_ADMIN);
 
             if (Predeploys.isSupportedPredeploy(
-                    addr, _input.fork, _input.useCustomGasToken, _input.useInterop, _input.devFeatureBitmap
+                    addr, _input.fork, _input.useCustomGasToken, false, _input.devFeatureBitmap
                 )) {
                 address implementation = Predeploys.predeployToCodeNamespace(addr);
                 EIP1967Helper.setImplementation(addr, implementation);
@@ -283,14 +269,6 @@ contract L2Genesis is Script {
         setSchemaRegistry(); // 20
         setEAS(); // 21
         setGovernanceToken(_input); // 42: OP (not behind a proxy)
-        if (_isGenesisInteropEnabled(_input)) {
-            // Both flags must be explicitly set in order to enable Interop
-            setCrossL2Inbox(); // 22
-            setL2ToL2CrossDomainMessenger(); // 23
-            setSuperchainETHBridge(); // 24
-            setETHLiquidity(); // 25
-            setUndeliveredMessageExporter(); // 30
-        }
         if (_input.useCustomGasToken) {
             setLiquidityController(_input); // 29
             setNativeAssetLiquidity(_input); // 2A
@@ -375,11 +353,7 @@ contract L2Genesis is Script {
             gasPayingTokenName: _input.gasPayingTokenName,
             gasPayingTokenSymbol: _input.gasPayingTokenSymbol
         });
-        config_.l2ToL2MessageExpiryPeriod = _input.l2ToL2MessageExpiryPeriod == 0
-            ? Constants.L2_TO_L2_MESSAGE_EXPIRY_PERIOD
-            : _input.l2ToL2MessageExpiryPeriod;
         config_.isCustomGasToken = _input.useCustomGasToken;
-        config_.isInterop = _isGenesisInteropEnabled(_input);
     }
 
     /// @notice Deterministic CREATE2 address of the throwaway L2ContractsManager.
@@ -415,13 +389,6 @@ contract L2Genesis is Script {
         vm.resetNonce(address(l2cm));
     }
 
-    /// @notice Returns true when interop should be active in the genesis state.
-    function _isGenesisInteropEnabled(Input memory _input) internal pure returns (bool) {
-        return _input.fork >= uint256(Fork.LAGOON) && _input.useInterop
-            && DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP);
-    }
-
-    function setInteropPredeployProxies() internal { }
 
     /// @notice This predeploy is following the safety invariant #2.
     ///         Follows invariant #2 since the constructor transfers ownership to the input owner,
@@ -498,11 +465,6 @@ contract L2Genesis is Script {
             IL1BlockCGT(Predeploys.L1_BLOCK_ATTRIBUTES).setFeature(Features.CUSTOM_GAS_TOKEN);
         } else {
             _setImplementationCode(Predeploys.L1_BLOCK_ATTRIBUTES);
-        }
-        // Only set the runtime INTEROP feature flag at genesis if the chain is being born at or
-        // beyond the Lagoon fork.
-        if (_isGenesisInteropEnabled(_input)) {
-            IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).setFeature(Features.INTEROP);
         }
     }
 
@@ -610,45 +572,6 @@ contract L2Genesis is Script {
         /// Reset so its not included state dump
         vm.etch(address(eas), "");
         vm.resetNonce(address(eas));
-    }
-
-    /// @notice This predeploy is following the safety invariant #1.
-    ///         This contract has no initializer.
-    function setCrossL2Inbox() internal {
-        Predeploys.assertGates(Predeploys.CROSS_L2_INBOX, DevFeatures.OPTIMISM_PORTAL_INTEROP, false, true);
-        _setImplementationCode(Predeploys.CROSS_L2_INBOX);
-    }
-
-    /// @notice This predeploy is following the safety invariant #1.
-    function setL2ToL2CrossDomainMessenger() internal {
-        Predeploys.assertGates(
-            Predeploys.L2_TO_L2_CROSS_DOMAIN_MESSENGER, DevFeatures.OPTIMISM_PORTAL_INTEROP, false, true
-        );
-        address impl = _setImplementationCode(Predeploys.L2_TO_L2_CROSS_DOMAIN_MESSENGER);
-        IL2ToL2CrossDomainMessenger(impl).initialize({ _expiryPeriod: Constants.L2_TO_L2_MESSAGE_EXPIRY_PERIOD });
-    }
-
-    /// @notice This predeploy is following the safety invariant #1.
-    ///         This contract has no initializer.
-    function setETHLiquidity() internal {
-        Predeploys.assertGates(Predeploys.ETH_LIQUIDITY, DevFeatures.OPTIMISM_PORTAL_INTEROP, false, true);
-        _setImplementationCode(Predeploys.ETH_LIQUIDITY);
-        vm.deal(Predeploys.ETH_LIQUIDITY, type(uint128).max);
-    }
-
-    /// @notice This predeploy is following the safety invariant #1.
-    ///         This contract has no initializer.
-    function setSuperchainETHBridge() internal {
-        Predeploys.assertGates(Predeploys.SUPERCHAIN_ETH_BRIDGE, DevFeatures.OPTIMISM_PORTAL_INTEROP, false, true);
-        _setImplementationCode(Predeploys.SUPERCHAIN_ETH_BRIDGE);
-    }
-
-    /// @notice This predeploy is following the safety invariant #1.
-    function setUndeliveredMessageExporter() internal {
-        Predeploys.assertGates(
-            Predeploys.UNDELIVERED_MESSAGE_EXPORTER, DevFeatures.OPTIMISM_PORTAL_INTEROP, false, true
-        );
-        _setImplementationCode(Predeploys.UNDELIVERED_MESSAGE_EXPORTER);
     }
 
     /// @notice This predeploy is following the safety invariant #1.

@@ -8,10 +8,6 @@ import (
 	"github.com/urfave/cli/v2"
 
 	opnode "github.com/ethereum-optimism/optimism/op-node"
-	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
-	"github.com/ethereum-optimism/optimism/op-node/cmd/genesis"
-	"github.com/ethereum-optimism/optimism/op-node/cmd/networks"
-	"github.com/ethereum-optimism/optimism/op-node/cmd/p2p"
 	"github.com/ethereum-optimism/optimism/op-node/flags"
 	"github.com/ethereum-optimism/optimism/op-node/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/node"
@@ -46,20 +42,8 @@ func main() {
 	app.Action = cliapp.LifecycleCmd(RollupNodeMain)
 	app.Commands = []*cli.Command{
 		{
-			Name:        "p2p",
-			Subcommands: p2p.Subcommands,
-		},
-		{
-			Name:        "genesis",
-			Subcommands: genesis.Subcommands,
-		},
-		{
 			Name:        "doc",
 			Subcommands: doc.NewSubcommands(metrics.NewMetrics("default", nil)),
-		},
-		{
-			Name:        "networks",
-			Subcommands: networks.Subcommands,
 		},
 	}
 
@@ -86,9 +70,9 @@ func RollupNodeMain(ctx *cli.Context, closeApp context.CancelCauseFunc) (cliapp.
 
 	// Only pretty-print the banner if it is a terminal log. Otherwise log it as key-value pairs.
 	if logCfg.Format == "terminal" {
-		log.Info("rollup config:\n" + cfg.Rollup.Description(chaincfg.L2ChainIDToNetworkDisplayName))
+		log.Info("rollup config:\n" + cfg.Rollup.Description(nil))
 	} else {
-		cfg.Rollup.LogDescription(log, chaincfg.L2ChainIDToNetworkDisplayName)
+		cfg.Rollup.LogDescription(log, nil)
 	}
 
 	n, err := node.New(ctx.Context, cfg, log, version.Version, m, nil)

@@ -167,7 +167,7 @@ func TestPayloadToSystemConfigUpgradeGas(t *testing.T) {
 		}}
 		l1Fetcher.ExpectFetchReceipts(epoch.Hash, l1Info, optypes.FromGethReceipts(receipts), nil)
 
-		attrBuilder := NewFetchingAttributesBuilder(cfg, params.MergedTestChainConfig, nil, l1Fetcher, l1CfgFetcher)
+		attrBuilder := NewFetchingAttributesBuilder(cfg, params.MergedTestChainConfig, l1Fetcher, l1CfgFetcher)
 		attrs, err := attrBuilder.PreparePayloadAttributes(context.Background(), l2Parent, epoch)
 		require.NoError(t, err)
 		require.NotNil(t, attrs.GasLimit)

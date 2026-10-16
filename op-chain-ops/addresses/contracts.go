@@ -89,8 +89,6 @@ type OpChainFaultProofsContracts struct {
 }
 
 type OpChainAltDAContracts struct {
-	AltDAChallengeProxy common.Address
-	AltDAChallengeImpl  common.Address
 }
 
 type OpChainLegacyContracts struct {

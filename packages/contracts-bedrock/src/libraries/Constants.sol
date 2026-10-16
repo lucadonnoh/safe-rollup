@@ -2,8 +2,6 @@
 pragma solidity ^0.8.0;
 
 // Interfaces
-import { IResourceMetering } from "interfaces/L1/IResourceMetering.sol";
-
 /// @title Constants
 /// @notice Constants is a library for storing constants. Simple! Don't put everything in here, just
 ///         the stuff used in multiple contracts. Constants that only apply to a single contract
@@ -63,18 +61,4 @@ library Constants {
 
     /// @notice Placeholder anchor root historically used for permissioned initial deployments.
     bytes32 internal constant PLACEHOLDER_STARTING_ANCHOR_ROOT = bytes32(hex"dead");
-
-    /// @notice Returns the default values for the ResourceConfig. These are the recommended values
-    ///         for a production network.
-    function DEFAULT_RESOURCE_CONFIG() internal pure returns (IResourceMetering.ResourceConfig memory) {
-        IResourceMetering.ResourceConfig memory config = IResourceMetering.ResourceConfig({
-            maxResourceLimit: 20_000_000,
-            elasticityMultiplier: 10,
-            baseFeeMaxChangeDenominator: 8,
-            minimumBaseFee: 1 gwei,
-            systemTxMaxGas: 1_000_000,
-            maximumBaseFee: type(uint128).max
-        });
-        return config;
-    }
 }

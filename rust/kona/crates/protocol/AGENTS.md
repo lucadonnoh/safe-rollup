@@ -1,1 +1,0 @@
-../../../../docs/ai/derivation.md

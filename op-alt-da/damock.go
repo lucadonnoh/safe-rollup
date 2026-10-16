@@ -3,7 +3,6 @@ package altda
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -86,22 +85,8 @@ var ErrNotEnabled = errors.New("altDA not enabled")
 // AltDADisabled is a noop AltDA implementation for stubbing.
 type AltDADisabled struct{}
 
-func (d *AltDADisabled) GetInput(ctx context.Context, l1 L1Fetcher, commitment CommitmentData, blockId eth.L1BlockRef) (eth.Data, error) {
+func (d *AltDADisabled) GetInput(ctx context.Context, commitment CommitmentData) (eth.Data, error) {
 	return nil, ErrNotEnabled
-}
-
-func (d *AltDADisabled) Reset(ctx context.Context, base eth.L1BlockRef, baseCfg eth.SystemConfig) error {
-	return io.EOF
-}
-
-func (d *AltDADisabled) Finalize(ref eth.L1BlockRef) {
-}
-
-func (d *AltDADisabled) OnFinalizedHeadSignal(f HeadSignalFn) {
-}
-
-func (d *AltDADisabled) AdvanceL1Origin(ctx context.Context, l1 L1Fetcher, blockId eth.BlockID) error {
-	return ErrNotEnabled
 }
 
 // FakeDAServer is a fake DA server for e2e tests.

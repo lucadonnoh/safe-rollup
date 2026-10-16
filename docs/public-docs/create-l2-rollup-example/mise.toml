@@ -1,8 +1,0 @@
-[tools]
-"jq" = "latest"
-"git" = "latest"
-"docker" = "latest"
-"foundry" = "latest"
-
-[settings]
-experimental = true

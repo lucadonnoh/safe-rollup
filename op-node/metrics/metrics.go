@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"time"
 
-	altda "github.com/ethereum-optimism/optimism/op-alt-da"
 	"github.com/ethereum-optimism/optimism/op-node/p2p/store"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	ophttp "github.com/ethereum-optimism/optimism/op-service/httputil"
@@ -152,8 +151,6 @@ type Metrics struct {
 	L1ReorgDepth prometheus.Histogram
 
 	TransactionsSequencedTotal *prometheus.CounterVec
-
-	AltDAMetrics altda.Metricer
 
 	// Channel Bank Metrics
 	headChannelOpenedEvent *metrics.Event
@@ -450,8 +447,6 @@ func NewMetrics(procName string, labels prometheus.Labels) *Metrics {
 			Buckets:   []float64{.05, .1, .2, .3, .5, .75, 1, 1.5, 2, 3, 5, 10, 30},
 			Help:      "Histogram of how far behind its timestamp a gossiped unsafe block arrives",
 		}),
-
-		AltDAMetrics: altda.MakeMetrics(ns, factory),
 
 		registry: registry,
 		factory:  factory,
