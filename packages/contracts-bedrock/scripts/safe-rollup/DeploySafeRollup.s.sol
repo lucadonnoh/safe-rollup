@@ -9,7 +9,8 @@ import { SafeRollupGateway } from "src/safe-rollup/SafeRollupGateway.sol";
 import { WithdrawalDelayModule } from "src/safe-rollup/WithdrawalDelayModule.sol";
 
 /// @notice Deploys the whole L1 side of a Safe rollup: a Safe, the gateway and the withdrawal module.
-///         Env: OWNER_KEYS (comma separated, the cold keys), THRESHOLD, RELAYER, WITHDRAWAL_DELAY, OUT.
+///         Env: OWNER_KEYS (comma separated, the cold keys), THRESHOLD, RELAYER, WITHDRAWAL_DELAY, OUT, and
+///         optionally SAFE_SINGLETON and SAFE_FACTORY to use an existing Safe v1.4.1 deployment.
 contract DeploySafeRollup is Script {
     function run() external {
         uint256[] memory ownerKeys = vm.envUint("OWNER_KEYS", ",");
@@ -19,13 +20,18 @@ contract DeploySafeRollup is Script {
             owners[i] = vm.addr(ownerKeys[i]);
         }
 
+        address singleton = vm.envOr("SAFE_SINGLETON", address(0));
+        address factory = vm.envOr("SAFE_FACTORY", address(0));
+
         vm.startBroadcast();
-        Safe singleton = new Safe();
-        SafeProxyFactory factory = new SafeProxyFactory();
+        // On an L1 with the canonical Safe deployment, using it lets the Safe app and explorers recognize the Safe.
+        if (singleton == address(0)) singleton = address(new Safe());
+        if (factory == address(0)) factory = address(new SafeProxyFactory());
         bytes memory setup = abi.encodeCall(
             Safe.setup, (owners, threshold, address(0), "", address(0), address(0), 0, payable(address(0)))
         );
-        Safe safe = Safe(payable(address(factory.createProxyWithNonce(address(singleton), setup, 0))));
+        Safe safe =
+            Safe(payable(address(SafeProxyFactory(factory).createProxyWithNonce(singleton, setup, block.number))));
         SafeRollupGateway gateway = new SafeRollupGateway(address(safe));
         WithdrawalDelayModule module =
             new WithdrawalDelayModule(safe, vm.envAddress("RELAYER"), uint64(vm.envUint("WITHDRAWAL_DELAY")));
@@ -35,7 +41,9 @@ contract DeploySafeRollup is Script {
         string memory json = "addresses";
         vm.serializeAddress(json, "safe", address(safe));
         vm.serializeAddress(json, "gateway", address(gateway));
-        string memory out = vm.serializeAddress(json, "module", address(module));
+        vm.serializeAddress(json, "module", address(module));
+        // Every deployment transaction lands at or after this block, so log scans can start here.
+        string memory out = vm.serializeUint(json, "deployBlock", block.number);
         vm.writeJson(out, vm.envString("OUT"));
     }
 

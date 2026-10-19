@@ -5,99 +5,99 @@ import {
   type Address,
   type Hash,
   type Hex,
-  concat,
   createPublicClient,
   createWalletClient,
-  encodeFunctionData,
   getAddress,
   http,
-  parseAbi,
-  zeroAddress,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { contracts as c, keys, l1Chain, log, rpc, sleep } from './env.ts'
+import { contracts as c, config, keys, l1Chain, l1Transport, log, rpc, sleep } from './env.ts'
+import { review } from './compliance.ts'
 import {
+  L1_LAG,
   L2_TO_L1_MESSAGE_PASSER,
   type Withdrawal,
   erc20Deposits,
+  execSafe,
   getWithdrawals,
+  inRanges,
   messagePassedEvent,
   moduleAbi,
   pairKey,
   toPayout,
+  vetoData,
 } from './lib.ts'
 
-const VETO_MARGIN_SECONDS = 10n
 
-const safeAbi = parseAbi([
-  'function nonce() view returns (uint256)',
-  'function getTransactionHash(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, uint256 nonce) view returns (bytes32)',
-  'function execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures) payable returns (bool)',
-])
-
-const l1 = createPublicClient({ chain: l1Chain, transport: http(rpc.l1) })
+const l1 = createPublicClient({ chain: l1Chain, transport: l1Transport })
 const l2 = createPublicClient({ transport: http(rpc.l2Verifier) })
-const owners = [keys.OWNER1_KEY, keys.OWNER2_KEY]
-  .map((key) => privateKeyToAccount(key))
-  .sort((a, b) => (BigInt(a.address) < BigInt(b.address) ? -1 : 1))
-const submitter = createWalletClient({ account: owners[0], chain: l1Chain, transport: http() })
+// The first owner key pays for the vetoes, so it is the one to fund.
+const owners = [keys.OWNER1_KEY, keys.OWNER2_KEY].map((key) => privateKeyToAccount(key))
+const submitter = createWalletClient({
+  account: privateKeyToAccount(keys.OWNER1_KEY),
+  chain: l1Chain,
+  transport: http(),
+})
 
 const withdrawals = new Map<Hash, Withdrawal>()
 const spent = new Map<string, bigint>()
 type Queued = { hash: Hash; to: Address; value: bigint; data: Hex; queuedAt: bigint }
 let unchecked: Queued[] = []
-let nextL1Block = 0n
+let nextL1Block = c.deployBlock
 let nextL2Block = 0n
 
+/** Vetoes a payout. The reason is recorded onchain, in the Safe transaction. */
 async function veto(hash: Hash, reason: string) {
-  const data = encodeFunctionData({ abi: moduleAbi, functionName: 'veto', args: [hash] })
-  const nonce = await l1.readContract({ address: c.safe, abi: safeAbi, functionName: 'nonce' })
-  const safeTxHash = await l1.readContract({
-    address: c.safe,
-    abi: safeAbi,
-    functionName: 'getTransactionHash',
-    args: [c.module, 0n, data, 0, 0n, 0n, 0n, zeroAddress, zeroAddress, nonce],
-  })
-  const signatures = concat(await Promise.all(owners.map((owner) => owner.sign({ hash: safeTxHash }))))
-  const tx = await submitter.writeContract({
-    address: c.safe,
-    abi: safeAbi,
-    functionName: 'execTransaction',
-    args: [c.module, 0n, data, 0, 0n, 0n, 0n, zeroAddress, zeroAddress, signatures],
-  })
+  const tx = await execSafe(l1, submitter, c.safe, owners, c.module, vetoData(hash, reason))
   await l1.waitForTransactionReceipt({ hash: tx })
   log('watcher', `VETOED: ${reason}`, { hash })
 }
 
 /** Returns false while the withdrawal is not visible yet on the verifier node. */
 async function check(q: Queued): Promise<boolean> {
+  // After a restart the scan replays every Queued event: skip vetoed payouts, and never veto paid ones.
+  const [, queuedAt, executed] = await l1.readContract({
+    address: c.module,
+    abi: moduleAbi,
+    functionName: 'items',
+    args: [q.hash],
+  })
+  if (queuedAt === 0n) return true
+  const reject = async (reason: string) => {
+    if (executed) log('watcher', `EXECUTED BEFORE IT WAS CHECKED: ${reason}`, { hash: q.hash })
+    else await veto(q.hash, reason)
+    return true
+  }
   const w = withdrawals.get(q.hash)
   if (!w) {
     const { timestamp } = await l1.getBlock()
     const delay = await l1.readContract({ address: c.module, abi: moduleAbi, functionName: 'delay' })
-    if (timestamp + VETO_MARGIN_SECONDS < q.queuedAt + delay) return false
-    await veto(q.hash, 'no such withdrawal on L2')
-    return true
+    if (!executed && timestamp + config.vetoMarginSeconds < q.queuedAt + delay) return false
+    return reject('INT-01 There is no such withdrawal on L2.')
   }
   const expected = await toPayout(w, c, l1)
   if (!expected || getAddress(expected.to) !== getAddress(q.to) || expected.value !== q.value || expected.data !== q.data) {
-    await veto(q.hash, 'payout does not match the L2 withdrawal')
-    return true
+    return reject('INT-02 The payout does not match the L2 withdrawal.')
   }
   if (expected.erc20) {
     const key = pairKey(expected.erc20.l1Token, expected.erc20.l2Token)
     const used = (spent.get(key) ?? 0n) + expected.erc20.amount
-    if (used > ((await erc20Deposits(l1, c)).get(key) ?? 0n)) {
-      await veto(q.hash, 'token payout above deposits')
-      return true
-    }
-    spent.set(key, used)
+    if (used > ((await erc20Deposits(l1, c)).get(key) ?? 0n)) return reject('INT-03 The token payout exceeds deposits.')
+  }
+  const finding = executed ? undefined : review(q.hash, expected)
+  if (finding) {
+    await veto(q.hash, finding)
+    return true
+  }
+  if (expected.erc20) {
+    const key = pairKey(expected.erc20.l1Token, expected.erc20.l2Token)
+    spent.set(key, (spent.get(key) ?? 0n) + expected.erc20.amount)
   }
   log('watcher', 'payout matches L2 withdrawal', { hash: q.hash })
   return true
 }
 
-while (true) {
+async function tick() {
   const l2Head = await l2.getBlockNumber()
   if (l2Head >= nextL2Block) {
     const logs = await l2.getLogs({
@@ -110,18 +110,18 @@ while (true) {
     nextL2Block = l2Head + 1n
   }
 
-  const l1Head = await l1.getBlockNumber()
+  const l1Head = (await l1.getBlockNumber()) - L1_LAG
   if (l1Head >= nextL1Block) {
-    const events = await l1.getContractEvents({
-      address: c.module,
-      abi: moduleAbi,
-      eventName: 'Queued',
-      fromBlock: nextL1Block,
-      toBlock: l1Head,
-    })
+    const events = await inRanges(
+      (fromBlock, toBlock) =>
+        l1.getContractEvents({ address: c.module, abi: moduleAbi, eventName: 'Queued', fromBlock, toBlock }),
+      nextL1Block,
+      l1Head,
+    )
     for (const e of events) {
       const block = await l1.getBlock({ blockNumber: e.blockNumber })
       const { withdrawalHash, to, value, data } = e.args as Required<typeof e.args>
+      if (unchecked.some((q) => q.hash === withdrawalHash)) continue
       unchecked.push({ hash: withdrawalHash, to, value, data, queuedAt: block.timestamp })
     }
     nextL1Block = l1Head + 1n
@@ -130,6 +130,14 @@ while (true) {
   const stillUnchecked: Queued[] = []
   for (const q of unchecked) if (!(await check(q))) stillUnchecked.push(q)
   unchecked = stillUnchecked
+}
 
-  await sleep(2000)
+// An RPC error must not take the watcher down: its state survives and the next tick retries.
+while (true) {
+  try {
+    await tick()
+  } catch (e) {
+    log('watcher', 'tick failed, retrying', { error: (e as Error).message.split('\n')[0] })
+  }
+  await sleep(config.pollMs)
 }

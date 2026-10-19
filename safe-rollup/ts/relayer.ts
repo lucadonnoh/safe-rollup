@@ -2,29 +2,45 @@
 // L1), then executes payouts whose delay has passed. Replaces op-proposer: no state roots on L1.
 import { type Hash, createPublicClient, createWalletClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { contracts as c, keys, l1Chain, log, rpc, safeL2Block, sleep } from './env.ts'
+import { contracts as c, config, keys, l1Chain, l1Transport, log, rpc, safeL2Block, sleep } from './env.ts'
 import {
+  L1_LAG,
   L2_TO_L1_MESSAGE_PASSER,
   type Payout,
   erc20Deposits,
   executeWithdrawal,
   getWithdrawalStatus,
   getWithdrawals,
+  inRanges,
   messagePassedEvent,
   moduleAbi,
   pairKey,
   toPayout,
 } from './lib.ts'
 
-const l1 = createPublicClient({ chain: l1Chain, transport: http(rpc.l1) })
+const l1 = createPublicClient({ chain: l1Chain, transport: l1Transport })
 const l2 = createPublicClient({ transport: http(rpc.l2) })
 const relayer = createWalletClient({ account: privateKeyToAccount(keys.RELAYER_KEY), chain: l1Chain, transport: http() })
 
 let nextBlock = 0n
 const pending = new Map<Hash, Payout>()
 const spent = new Map<string, bigint>()
+// A veto is final: a restarted relayer must not queue a vetoed withdrawal again.
+const vetoed = new Set<Hash>()
+let nextVetoBlock = c.deployBlock
 
-while (true) {
+async function tick() {
+  const l1Head = (await l1.getBlockNumber()) - L1_LAG
+  if (l1Head >= nextVetoBlock) {
+    const events = await inRanges(
+      (fromBlock, toBlock) => l1.getContractEvents({ address: c.module, abi: moduleAbi, eventName: 'Vetoed', fromBlock, toBlock }),
+      nextVetoBlock,
+      l1Head,
+    )
+    for (const e of events) vetoed.add(e.args.withdrawalHash as Hash)
+    nextVetoBlock = l1Head + 1n
+  }
+
   const safeHead = await safeL2Block()
   if (safeHead >= nextBlock) {
     const logs = await l2.getLogs({
@@ -35,6 +51,7 @@ while (true) {
     })
     const deposits = await erc20Deposits(l1, c)
     for (const w of getWithdrawals(logs)) {
+      if (vetoed.has(w.withdrawalHash)) continue
       const payout = await toPayout(w, c, l1)
       if (!payout) {
         log('relayer', 'skipping withdrawal that cannot be paid out', { hash: w.withdrawalHash })
@@ -79,6 +96,14 @@ while (true) {
     }
     if (status === 'ready-to-execute' || status === 'executed' || status === 'waiting-to-queue') pending.delete(hash)
   }
+}
 
-  await sleep(2000)
+// An RPC error must not take the relayer down: its state survives and the next tick retries.
+while (true) {
+  try {
+    await tick()
+  } catch (e) {
+    log('relayer', 'tick failed, retrying', { error: (e as Error).message.split('\n')[0] })
+  }
+  await sleep(config.pollMs)
 }

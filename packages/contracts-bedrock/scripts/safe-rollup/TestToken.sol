@@ -5,7 +5,7 @@ import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /// @notice Plain L1 token for the devnet demo.
 contract TestToken is ERC20 {
-    constructor(address _holder) ERC20("Test Token", "TEST") {
+    constructor(address _holder) ERC20("Real World Asset", "RWA") {
         _mint(_holder, 1_000_000 ether);
     }
 }

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Safe Rollup: architecture</title>
+<link rel="stylesheet" href="../lib/promo.css">
+<style>
+  .title h1 { font-size: 132px; max-width: 13ch; }
+  .diagrams { padding: 180px 120px 0; justify-content: flex-start; }
+  .cols { display: grid; grid-template-columns: 2fr 1fr; column-gap: 60px; align-items: start; }
+  .cols b { display: block; font-size: 46px; letter-spacing: -0.02em; }
+  .cols .sub { display: block; font-size: 30px; color: var(--muted); margin-top: 6px; }
+  .cols svg { width: 100%; display: block; margin-top: 34px; overflow: visible; }
+  .x48 { margin-top: 90px; color: var(--brand); }
+  .x48 .big { font-size: 190px; font-weight: 700; letter-spacing: -0.05em; line-height: 0.9; }
+  .x48 .less { font-size: 54px; font-weight: 600; letter-spacing: -0.02em; }
+  .promise { font-size: 96px; max-width: 22ch; }
+  .bugs { margin-top: 80px; font-size: 64px; letter-spacing: -0.02em; font-weight: 300; }
+  .bugs b { font-weight: 700; }
+</style>
+</head>
+<body data-duration="19.6" data-end="17.4" data-brand-at="0">
+
+<section class="scene title bg-hero" data-out="3.4" data-out-anim="outup">
+  <div class="eyebrow" data-at="0" data-anim="settle" data-dur="1.6">Architecture</div>
+  <h1 data-at="0" data-anim="settle" data-dur="1.6">The same multisig, <b>without the contracts in between.</b></h1>
+</section>
+
+<section class="scene diagrams bg-white" data-at="3.4" data-anim="fade" data-dur="0.4" data-out="9.8">
+  <div class="cols">
+    <div>
+      <div data-at="3.5"><b>Stage 0 OP Stack</b><span class="sub">29 contracts, 11 proxies, 9,555 lines</span></div>
+      <div id="old"></div>
+    </div>
+    <div>
+      <div data-at="6.2"><b>Safe Rollup</b><span class="sub">2 contracts, 199 lines</span></div>
+      <div id="new"></div>
+      <div class="x48" data-at="7.2" data-anim="pop"><div class="big">48×</div><div class="less">less code</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="scene bg-white" data-at="9.8" data-anim="fade" data-dur="0.4">
+  <h2 class="promise" data-at="10.0">Give your users every guarantee of a Stage 0 chain.<br><b>In 199 lines.</b></h2>
+  <p class="bugs" data-at="12.6">An estimated <b>140 to 468 bugs</b> never deployed.¹</p>
+  <p class="foot" data-at="12.8" data-anim="fade">¹ 9,356 fewer lines of Solidity, at 15 to 50 defects per 1,000 lines (S. McConnell, Code Complete).</p>
+</section>
+
+<script>
+// The two diagrams are the ones on the site. Each contract's box and label become one group so
+// they can appear one by one, top to bottom.
+window.prepare = async () => {
+  const site = new DOMParser().parseFromString(await (await fetch('/site/index.html')).text(), 'text/html')
+  const build = (svg, start, step) => {
+    const [lines, safe] = svg.querySelectorAll(':scope > g')
+    lines.dataset.at = String(start + 0.15)
+    lines.dataset.anim = 'fade'
+    const safeLabel = [...svg.querySelectorAll(':scope > text')].find((t) => t.textContent === 'Safe')
+    const safeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+    safe.replaceWith(safeGroup)
+    safeGroup.append(safe, safeLabel)
+    safeGroup.dataset.at = String(start)
+    safeGroup.dataset.anim = 'pop'
+    const rects = [...svg.querySelectorAll(':scope > g rect')]
+    const nodes = []
+    const claimed = new Set()
+    for (const label of svg.querySelectorAll(':scope > text')) {
+      if (label === safeLabel) continue
+      const x = Number(label.getAttribute('x'))
+      const y = Number(label.getAttribute('y')) - 4
+      const legend = label.getAttribute('text-anchor') === 'start'
+      const mine = rects.filter((r) => {
+        const rx = Number(r.getAttribute('x')), ry = Number(r.getAttribute('y'))
+        const w = Number(r.getAttribute('width')), h = Number(r.getAttribute('height'))
+        return !claimed.has(r) && (legend ? rx < x && ry > y - 30 : x > rx && x < rx + w && y > ry - 8 && y < ry + h + 8)
+      })
+      for (const r of mine) claimed.add(r)
+      const g = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+      g.setAttribute('stroke', '#16209a')
+      g.setAttribute('stroke-width', '1.1')
+      for (const r of mine) g.append(r)
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+      text.setAttribute('stroke', 'none')
+      text.append(label)
+      g.append(text)
+      nodes.push({ g, y: legend ? 1e9 : y, x })
+    }
+    for (const g of svg.querySelectorAll(':scope > g')) if (g !== lines && g !== safeGroup && g.childElementCount === 0) g.remove()
+    nodes.sort((a, b) => a.y - b.y || a.x - b.x)
+    nodes.forEach((n, i) => {
+      n.g.dataset.at = String(start + 0.2 + i * step)
+      n.g.dataset.anim = 'pop'
+      n.g.dataset.dur = '0.5'
+      svg.append(n.g)
+    })
+    lines.dataset.at = String(start + 0.2 + nodes.length * step)
+    lines.dataset.dur = '1'
+    return svg
+  }
+  document.getElementById('old').append(build(site.querySelector('.arch .so svg'), 3.7, 0.05))
+  document.getElementById('new').append(build(site.querySelector('.arch .sn svg'), 6.4, 0.2))
+}
+</script>
+<script src="../lib/engine.js"></script>
+</body>
+</html>

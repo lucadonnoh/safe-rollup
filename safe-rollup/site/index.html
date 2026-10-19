@@ -1,0 +1,925 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Safe Rollup | Ethereum-anchored. Operator-controlled.</title>
+<link rel="icon" href="/favicon.png" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="description" content="Safe as in Safe multisig, not safe funds. Institutional settlement with the credibility of Ethereum and the control of a database. This is a parody.">
+<style>
+  :root {
+    --bg: #ffffff; --band: #f5f7fb; --ink: #0a0b10; --muted: #5d6475; --line: #e4e7ee;
+    --brand: #16209a; --brand-ink: #ffffff; --brand-soft: #eef1ff; --sky1: #c9dbff; --sky2: #edf4ff;
+    --ok: #12804a; --bad: #c2362b; --warn: #b88400;
+  }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body { margin: 0; font: 16px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased; }
+  a { color: var(--brand); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 1.5rem; }
+  h1, h2, h3 { margin: 0 0 0.5rem; letter-spacing: -0.02em; line-height: 1.08; }
+  h2 { font-size: clamp(2rem, 4.4vw, 3.4rem); font-weight: 300; }
+  h2 b { font-weight: 700; }
+  h3 { font-size: 1.1rem; font-weight: 600; letter-spacing: -0.01em; line-height: 1.25; }
+  p { margin: 0.5rem 0; }
+  .muted { color: var(--muted); }
+  .small { font-size: 0.875rem; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+  .eyebrow { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; letter-spacing: 0.18em; font-size: 0.75rem; color: var(--muted); margin-bottom: 1rem; }
+  .eyebrow::before { content: "{ "; color: #e0a100; }
+  .eyebrow::after { content: " }"; color: #e0a100; }
+  section { padding: 5.5rem 0; }
+  section.band { background: var(--band); }
+  .lead { max-width: 62ch; color: var(--muted); font-size: 1.1rem; margin: 1rem 0 2rem; }
+  sup a { text-decoration: none; font-weight: 600; font-size: 0.75em; }
+  h2 sup { font-size: 0.35em; vertical-align: super; }
+
+  .btn { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.8rem 1.4rem; border-radius: 999px; font-weight: 500; border: 1px solid transparent; white-space: nowrap; }
+  .btn:hover { text-decoration: none; filter: brightness(1.1); }
+  .btn.primary { background: var(--brand); color: var(--brand-ink); }
+  .btn.ghost { border-color: color-mix(in srgb, var(--brand) 35%, transparent); color: var(--brand); background: rgba(255,255,255,0.6); }
+
+  .announce { background: var(--brand); color: #fff; text-align: center; font-size: 0.9rem; padding: 0.55rem 1rem; }
+  .announce a { color: #fff; }
+  .announce .new { background: rgba(255,255,255,0.18); border-radius: 999px; padding: 0.1rem 0.55rem; font-size: 0.75rem; font-weight: 600; margin-right: 0.5rem; }
+
+  header.top { position: sticky; top: 0; z-index: 10; background: rgba(255,255,255,0.85); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+  nav { display: flex; align-items: center; gap: 2rem; height: 68px; }
+  .logo { display: flex; align-items: center; gap: 0.55rem; font-weight: 700; font-size: 1.15rem; color: var(--ink); letter-spacing: -0.02em; }
+  .logo:hover { text-decoration: none; }
+  .logo svg { width: 26px; height: 26px; }
+  /* Wordmark: Sora Bold (SIL Open Font License 1.1), subset to the letters of "Safe Rollup". */
+  @font-face { font-family: "Safe Rollup Wordmark"; font-weight: 700; src: url(data:font/woff2;base64,d09GMgABAAAAAAbQABAAAAAADhgAAAZ1AAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGlobghwcaAZgP1NUQVQqAGQRCAqKHIgxATYCJAM4Cx4ABCAFiBoHIAwHG/cLKJ4FTtkVg4jFUI/O33VhDXsoFAZ9/X6ffebOA1wCEGodUYh8ygNpFopIODQyLj4VYaL/D3j6vRSzun9NN5caWAxA2qRaLwU/QB1MgmDM3f9vqCXzRClaIeKdJbSapEIqViolklj/A7DD/mu/Vvdd+kP7XKLpYh4KVxqp7ezp8vDEzsPMQxLNJJkO9WtCKkNkOqVQCZFYqIXEU9XMYculyCGUzPEc/YQIlGAaYJw4iaVMJieViuSCdpnYEEEskRKnOAaKWE5xGZD8Zks7AwSvHSdG2dDWt0NMC/OSEMMBL8+KM8JNQhiwFM5yS8q8TIM3cOl3p1R34zf/geBfqf6vzuXTUCqLcksBKrMgt0rMBZBIRBqEMLQpUQi1rh9CTBJgK1S1ZTVjQQfJOFCh8G+WIlQQycRMtH8ggQx6XqGc8yti75RuALbvpWMQR7lfSfIvm13gklm+uvP/Hv7JArlgE/YWDKOSUbmDdgjoR7kxW7xIY5O4qMN+AQAGQlpL5S2nOQA0i7O6DWuDMbFz8rXh0ApEwPG17qAtNlpvrVUhlBaxcRBSjVFJKT/QB4AtAgC42RpotyCQM50LNOm0ZV0ryRkFUbQyFCqp9A/qbM6ITzUikU8uIpMvRMw5BxF3L18Wc58/x6Nnz7bK2tuRSK53xsa3Y+l1ERVeXYzsIVkNd4+G40fuRESoGsixOS9ehPrR/tsUdlA/6NSisZ8299wd8BfOubUPJp3XaJ4ryaMKyfsWsGcc2Xkzb83TOdymSEYlWoki9exBZskm2YsIJSHSwlIZ1c7kFw/yOfeecfv8fqQfMiKDloL+WOKuXUDbR6JBNyHnO0diCXLCqXeQWM4diai64OFVawRsNbrImtz6+2zuw5ca4w2n9EgmG6q8/bWzCkof3eoSHl2+fWPOC4Ra2KPHsXr62em5ivr/ndt/X1qaW/sGqkDRXqaFX1DXxFPKagsKtLxw7oymKW8SgZiJpZgNG7ei+kS1u1R0QwStv9s+SH2uOva+Cr68O5ZTfy07+1p9zrG5O/umy3UjrXEtets0aR80jRhnlmrsuo2Z3/8j4b/8KzP7VCUdt4dN9mHaSiIgb+0co66w6Tcx1nHyckKDaczzid6mkNHy6sFqrd4yXQXLtjAOsUdzU3RIHfXDF+xpBTLqxC0oGq5v5kUXnS8UNSqKS+odOTW+Hj/7VjbrFpux5Xxal57b0FgIVSNam0DbnIPLkhQ5uKbJwq/qDjaWTaiTf9o3TSViaPBC9vJRepmIoT8p5LpWLT2h6bAKoGNtaKTPqg02MN5lSJ5v9eE+aF8fsvVZJUE14z5D9YSUXBWsZUUhbwaYpiigtGS/fuvtW0XYNt9hX/5F/7t+OpuJVOy+/bONvhqfceNbm95665b/bT8014kPIfvIsm1E7+DWN+TjylRVgamxIbXR6EhuQ0OhSZWqzMfrv/+x+hmCl6iOK2Bpv+Rx/0S1Ai5T9zvs/Hzz8Fuo3SInoSxX9RdW1mbhxalFLFN5XT+7uNQgLrJQms+aZxQV3mTpBAKW5gQ750eSl8uZ9z/E0DVizLjSTVpuIpvTwa/clDPx88g2NtkmKwUAGr8UwPDdcOfDa7HF/8Mq/AP+NMwBAPj7Z02D2Lay7lQ8QMwACE9kYoxiiE8RlF1dt6Az37KXa4GZrWlJJ+THBEjKD41GkpF7f4YoIja/Qn5ehBpPsCcogYDaCjoAUX5NfgCVGhnwCgDhknrFTe0TDxYd467bRzzS6y8e644knhoMLs9sRS0vbMYCXlqOa7yKUf2SWduslEKCsnbeJyat81DFwWk0NyszCy+UmJCICqodByJ3Gwc3TDdzu8M2BCNDV/ABtJDAgwVCbl5OHmoCAmbW0s/HgM/I4U0CHlniCcJNOJjGSV6FvT+lFcHMxw7jJsYn1INFGjXF7RpFjKN4ccwaCjU7EeRh7fMAKr0zOaw0TZJhtYPDCJR2xORRCxUWkwUmuw1rmAtVW5DVh0Rs4KYaYfCtV7De1MfpfAbJ+XwkgtePRBjQO2bJvT1u5ZlDZJ+VCWKA20pAaXK8bzEikDwIOJQPCUdwQ3lPia5RH1ETJ2OT/OF6GeBuuf4gkkbk1G3be2xMGuP30borZGC31wZOmaRInyq0IMIC6i3XlTyMJ77WubbokUT+vj8OM4EmWvXc9i7EXfpWlRzscFQANNYlpqZ+Q/6fPtp8AA==) format("woff2"); }
+  .wm { font-family: "Safe Rollup Wordmark", Inter, ui-sans-serif, system-ui, sans-serif; font-weight: 700; letter-spacing: -0.04em; color: var(--ink); }
+  .wm i { font-style: normal; color: var(--brand); }
+  .brand { font-family: "Safe Rollup Wordmark", Inter, ui-sans-serif, system-ui, sans-serif; font-weight: 700; letter-spacing: -0.03em; white-space: nowrap; }
+  nav .links { display: flex; gap: 1.6rem; font-size: 0.95rem; }
+  nav .links a { color: var(--ink); }
+  nav .links a.menu::after { content: " ⌄"; color: var(--muted); font-size: 0.8em; }
+  nav .cta { margin-left: auto; padding: 0.6rem 1.2rem; }
+
+  .hero { background: linear-gradient(120deg, var(--sky1) 0%, var(--sky2) 55%, #ffffff 100%); padding: 4.5rem 0 5rem; }
+  .hero .grid2 { display: grid; grid-template-columns: 1.05fr 1fr; gap: 3rem; align-items: center; }
+  .hero .label { font-size: 1.9rem; letter-spacing: -0.02em; margin-bottom: 0.6rem; }
+  .hero .label .for { color: var(--brand); font-weight: 500; font-size: 0.7em; letter-spacing: 0; }
+  .hero h1 { font-size: clamp(2.4rem, 5vw, 4rem); font-weight: 600; max-width: 15ch; }
+  .hero .tagline { font-size: clamp(1.2rem, 2.2vw, 1.5rem); font-weight: 500; margin: 1.25rem 0 0.75rem; color: var(--brand); }
+  .hero .sub { max-width: 52ch; color: #1d2340; font-size: 1.1rem; }
+  .hero .cta { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 2rem 0 1.25rem; }
+  .hero .fine { color: var(--muted); font-size: 0.85rem; }
+
+  .chip { display: inline-block; border-radius: 6px; padding: 0.08rem 0.45rem; font-size: 0.7rem; font-weight: 600; }
+  .chip.v { background: #fde7e5; color: var(--bad); }
+
+  .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; min-width: 0; }
+  .sum { display: flex; flex-direction: column; background: #fff; border-radius: 14px; padding: 1rem 1.1rem 1.1rem; color: var(--ink); box-shadow: 0 12px 32px rgba(22,32,154,0.10), 0 1px 3px rgba(0,0,0,0.05); transition: transform 0.15s, box-shadow 0.15s; }
+  .sum:hover { text-decoration: none; transform: translateY(-2px); box-shadow: 0 16px 40px rgba(22,32,154,0.16), 0 1px 3px rgba(0,0,0,0.05); }
+  .sum .k { display: flex; justify-content: space-between; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.68rem; color: var(--brand); }
+  .sum .k::after { content: "›"; color: var(--muted); letter-spacing: 0; }
+  .sum .v { font-size: 1.55rem; font-weight: 700; letter-spacing: -0.03em; line-height: 1.15; margin: 0.45rem 0 0.35rem; }
+  .sum .t { color: var(--muted); font-size: 0.85rem; line-height: 1.4; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--line); }
+  .stat { padding: 2rem 1.5rem; border-left: 1px solid var(--line); }
+  .stat:first-child { border-left: none; padding-left: 0; }
+  table.caps { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  table.caps td { padding: 0.75rem 1rem 0.75rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.caps td:first-child { font-weight: 600; white-space: nowrap; }
+  .findings { list-style: none; padding: 0; margin: 1rem 0 0.75rem; }
+  .findings li { padding: 0.8rem 0; border-bottom: 1px solid var(--line); }
+  .findings .meta { display: block; color: var(--muted); font-size: 0.8rem; margin-top: 0.25rem; }
+  .findings .chip { margin-right: 0.4rem; }
+  .comp { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem 3.5rem; margin-top: 2.5rem; }
+  .comp h3 { font-size: 1.4rem; }
+  .pull { display: flex; flex-direction: column; justify-content: center; margin: 0; padding: 2.5rem; background: var(--brand-soft); border-radius: 18px; }
+  .pull blockquote { margin: 0; font-size: clamp(1.3rem, 2.2vw, 1.75rem); font-weight: 500; letter-spacing: -0.02em; line-height: 1.3; }
+  .pull figcaption { margin-top: 1.25rem; color: var(--muted); }
+  .stats.three { grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); margin-top: 3rem; }
+  .stat .value { font-size: clamp(2rem, 3.6vw, 2.8rem); font-weight: 300; letter-spacing: -0.03em; }
+  .stat .label { font-weight: 600; margin-top: 0.2rem; }
+  .stat .note { color: var(--muted); font-size: 0.8rem; margin-top: 0.3rem; }
+
+  .logos { display: flex; flex-wrap: wrap; justify-content: space-around; align-items: center; gap: 1.5rem 2.5rem; padding: 1.5rem 0 0.5rem; opacity: 0.55; }
+  .logos a, .logos span { color: var(--ink); }
+  .logos a:hover { text-decoration: none; opacity: 1; }
+  .wm1 { font-family: Georgia, "Times New Roman", serif; font-size: 1.6rem; font-style: italic; letter-spacing: -0.02em; }
+  .wm2 { font-family: ui-monospace, Menlo, monospace; font-size: 1.3rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+  .wm3 { font-size: 1.55rem; font-weight: 800; letter-spacing: -0.05em; }
+  .cohort-cap { text-align: center; color: var(--muted); font-size: 0.85rem; margin-top: 1rem; }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 3.5rem; align-items: center; }
+  .illo { background: linear-gradient(160deg, #cfe3ff 0%, #a9c3f3 100%); border-radius: 14px; aspect-ratio: 4 / 3; overflow: hidden; }
+  .illo svg { width: 100%; height: 100%; display: block; }
+  .badges { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.25rem 0; }
+  .badge { border: 1px solid color-mix(in srgb, var(--brand) 30%, transparent); color: var(--brand); background: var(--brand-soft); border-radius: 999px; padding: 0.25rem 0.8rem; font-size: 0.82rem; font-weight: 600; }
+
+  table.vs { border-collapse: separate; border-spacing: 0; width: 100%; margin-top: 3rem; }
+  table.vs th, table.vs td { padding: 0.85rem 1rem; border-bottom: 1px solid var(--line); vertical-align: middle; text-align: left; }
+  table.vs th:first-child, table.vs td:first-child { padding-left: 0; color: var(--muted); width: 30%; }
+  table.vs .them { color: var(--muted); }
+  table.vs th.them { font-weight: 600; vertical-align: bottom; }
+  table.vs .ours { background: var(--brand-soft); border-left: 2px solid var(--brand); border-right: 2px solid var(--brand); color: var(--ink); font-weight: 600; }
+  table.vs th.ours { border-top: 2px solid var(--brand); border-radius: 16px 16px 0 0; padding-top: 1.1rem; vertical-align: bottom; }
+  table.vs tr.last .ours { border-bottom: 2px solid var(--brand); border-radius: 0 0 16px 16px; }
+  table.vs th.ours .name { display: block; font-size: 1.15rem; font-weight: 800; }
+  table.vs .pill { display: inline-block; background: var(--brand); color: #fff; font-size: 0.66rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; border-radius: 999px; padding: 0.15rem 0.6rem; margin-bottom: 0.4rem; }
+  table.vs tr.group td { font-family: ui-monospace, Menlo, monospace; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.14em; color: var(--ink); padding-top: 1.5rem; padding-bottom: 0.4rem; }
+  .mk { display: inline-flex; width: 1.3rem; height: 1.3rem; border-radius: 50%; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 900; margin-right: 0.55rem; vertical-align: middle; position: relative; top: -0.1rem; }
+  .mk.yes { background: #dcf3e5; color: var(--ok); }
+  .mk.no { background: #fbe1de; color: var(--bad); }
+  .mk.part { background: #fff1c9; color: var(--warn); }
+  .vs-foot { margin-top: 0.75rem; }
+  .arch { display: grid; grid-template-columns: 2fr 1fr; grid-template-areas: "ho hn" "so sn" "loc loc" "note note"; column-gap: 3rem; background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 1.6rem; margin-top: 1rem; }
+  .arch .ho { grid-area: ho; } .arch .hn { grid-area: hn; } .arch .so { grid-area: so; } .arch .sn { grid-area: sn; }
+  .arch .ho, .arch .hn { margin-bottom: 1rem; }
+  .arch .ho b, .arch .hn b { display: block; font-size: 1.15rem; }
+  .arch .ho span, .arch .hn span { font-size: 0.88rem; }
+  .arch svg { width: 100%; display: block; }
+  .arch .loc { grid-area: loc; display: grid; grid-template-columns: max-content 1fr max-content; gap: 0.6rem 1rem; align-items: center; border-top: 1px solid var(--line); margin-top: 1.5rem; padding-top: 1.4rem; font-size: 0.9rem; font-weight: 600; }
+  .arch .bar { height: 10px; }
+  .arch .bar i { display: block; height: 100%; border-radius: 5px; background: #aab3c5; }
+  .arch .bar.ours i { background: var(--brand); }
+  .arch .loc .n { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+  .arch .note { grid-area: note; margin: 1rem 0 0; }
+
+  section.refsec { padding: 3rem 0; border-top: 1px solid var(--line); }
+  .refsec .refs { columns: 2 420px; column-gap: 3rem; }
+  .refsec .refs li { break-inside: avoid; }
+  .badge sup a { color: inherit; }
+  .refs { color: var(--muted); font-size: 0.82rem; padding-left: 1.25rem; margin: 1.25rem 0 0.5rem; max-width: 85ch; }
+  .refs li { margin: 0.3rem 0; }
+  .after-table { max-width: 72ch; margin-top: 1.5rem; }
+
+  .stat-big { font-size: clamp(3rem, 6vw, 4.8rem); font-weight: 300; letter-spacing: -0.04em; color: var(--bad); line-height: 1; }
+  .stat-big.up { color: var(--ok); margin-top: 1.5rem; }
+  .stat-big small { font-size: 0.4em; letter-spacing: 0; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 3rem; }
+  .card { background: #fff; border-radius: 16px; padding: 1.6rem; border: 1px solid var(--line); }
+  .card p { color: var(--muted); font-size: 0.95rem; }
+  .solutions .card { min-height: 220px; display: flex; flex-direction: column; }
+  .solutions .card h3 { font-size: 1.25rem; }
+  .solutions .card h3::after { content: " ›"; color: var(--muted); }
+  .solutions .card .tag { margin-top: auto; padding-top: 1.5rem; font-family: ui-monospace, Menlo, monospace; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--brand); }
+
+  table.plain { width: 100%; border-collapse: collapse; }
+  table.plain th, table.plain td { text-align: left; padding: 0.8rem 1rem 0.8rem 0; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+  table.plain th { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .scroll table { min-width: 720px; }
+  .scroll th, .scroll td { overflow-wrap: normal; white-space: nowrap; }
+  .scroll td .reason { white-space: normal; min-width: 280px; max-width: 360px; }
+  .addon { margin-top: 1.5rem; border-radius: 16px; padding: 1.6rem; background: var(--brand-soft); border: 1px solid color-mix(in srgb, var(--brand) 25%, transparent); }
+  .addon ul { margin: 0.5rem 0 0; padding-left: 1.2rem; color: #1d2340; }
+  ol.steps { list-style: none; padding: 0; margin: 2rem 0 0.75rem; display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+  ol.steps li { display: grid; grid-template-columns: 2.2rem 1fr; gap: 0.8rem; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 1.2rem; }
+  ol.steps .n { width: 2.2rem; height: 2.2rem; border-radius: 50%; background: var(--brand); color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  ol.steps li:first-child .n { background: var(--muted); }
+  ol.steps li:first-child { grid-column: 1 / -1; }
+  ol.steps b { display: block; margin-bottom: 0.25rem; }
+  ol.steps .tag { display: inline-block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 0.05rem 0.4rem; margin-bottom: 0.35rem; }
+  .row-cta { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.5rem; }
+
+  .assure { display: grid; grid-template-columns: 170px 1fr; gap: 2rem; background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 2rem; margin-top: 2.5rem; }
+  .seal { width: 150px; height: 170px; border: 2px solid #aab3c5; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #2a3145; background: #fafbfd; }
+  .seal .t1 { font-family: Georgia, serif; font-size: 0.8rem; letter-spacing: 0.08em; }
+  .seal .t2 { font-family: Georgia, serif; font-size: 1.9rem; font-weight: 700; line-height: 1.1; }
+  .seal .t3 { font-family: Georgia, serif; font-size: 0.8rem; }
+  .seal .t4 { margin-top: 0.6rem; background: #aab3c5; color: #fff; font-weight: 700; font-size: 0.8rem; padding: 0.2rem 0.6rem; border-radius: 4px; }
+  .assure .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem 2rem; margin: 1.25rem 0; }
+  .assure .k { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .assure .v { font-weight: 600; font-size: 0.92rem; }
+
+  .quote { display: grid; grid-template-columns: 1fr 220px; gap: 2.5rem; align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 2.5rem; margin-top: 1.5rem; }
+  .quote blockquote { margin: 0; font-size: clamp(1.3rem, 2.4vw, 1.9rem); font-weight: 500; letter-spacing: -0.02em; line-height: 1.3; }
+  .quote .who { margin-top: 1.5rem; }
+  .quote .who b { display: block; }
+  .quote .avatar { width: 220px; height: 220px; border-radius: 12px; overflow: hidden; background: #ddd; }
+  .quote .avatar svg { width: 100%; height: 100%; display: block; }
+
+  .net h3 { margin-top: 2.25rem; }
+  details.more { margin-top: 2rem; }
+  details.more > summary { cursor: pointer; font-weight: 600; color: var(--brand); }
+  .vetoed { color: var(--bad); font-weight: 600; }
+  .executed { color: var(--ok); font-weight: 600; }
+
+  .faq { display: grid; grid-template-columns: 1fr 1.3fr; gap: 3rem; }
+  .faq h2 { font-size: clamp(2.4rem, 5vw, 4.2rem); }
+  .faq details { border-bottom: 1px solid var(--ink); padding: 1.2rem 0; }
+  .faq summary { cursor: pointer; font-weight: 600; list-style: none; display: block; position: relative; padding-right: 2rem; }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::after { content: "⌄"; color: var(--muted); position: absolute; right: 0; top: 0; }
+  .faq details[open] summary::after { content: "⌃"; }
+  .faq details p { color: var(--muted); margin-top: 0.8rem; }
+
+  footer.legal { background: #0b0d18; color: #a8afc2; padding: 3.5rem 0 4rem; font-size: 0.88rem; }
+  footer.legal a { color: #dfe4f2; }
+  footer.legal .links { display: flex; flex-wrap: wrap; gap: 1.5rem; margin-bottom: 1.5rem; }
+  footer.legal p { max-width: 85ch; }
+
+  @media (max-width: 900px) {
+    ol.steps { grid-template-columns: 1fr 1fr; }
+    nav .links { display: none; }
+    .hero .grid2, .split, .faq, .quote, .assure, .comp { grid-template-columns: 1fr; }
+    .assure .seal { justify-self: center; }
+    .pull { order: 1; padding: 1.75rem; }
+    .stats, .stats.three { grid-template-columns: 1fr 1fr; }
+    .stat { border-left: none; padding-left: 0; border-top: 1px solid var(--line); }
+    .stat:nth-child(-n+2) { border-top: none; }
+    .cards { grid-template-columns: 1fr; }
+    .sum .v { font-size: 1.3rem; }
+    .quote .avatar { width: 140px; height: 140px; }
+    .logos { justify-content: center; }
+    section { padding: 4rem 0; }
+  }
+  @media (max-width: 760px) {
+    table.vs th, table.vs td { padding: 0.6rem 0.5rem; font-size: 0.88rem; }
+    table.vs th:first-child, table.vs td:first-child { width: 28%; }
+    table.vs .mk { display: none; }
+    table.vs td.ours .mk.yes { display: inline-flex; }
+    .assure .fields { grid-template-columns: 1fr; }
+    ol.steps { grid-template-columns: 1fr; }
+    .summary { gap: 0.6rem; }
+    .sum { padding: 0.85rem 0.9rem 0.95rem; }
+    .sum .v { font-size: 1.15rem; }
+    .arch { grid-template-columns: 1fr; grid-template-areas: "ho" "so" "hn" "sn" "loc" "note"; padding: 1.2rem; }
+    .arch .sn svg { width: 50%; margin: 0 auto; }
+    .arch .hn { margin-top: 1.75rem; }
+  }
+</style>
+</head>
+<body>
+
+<div class="announce"><a href="#zero-proofs"><span class="new">New</span>Zero Proofs™ reach 100% real-time proving →</a></div>
+
+<header class="top">
+  <div class="wrap">
+    <nav>
+      <a class="logo" href="/">
+        <svg viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="7" fill="#16209a"/><circle cx="8" cy="13" r="2.4" fill="#fff"/><circle cx="13" cy="13" r="2.4" fill="#fff"/><circle cx="18" cy="13" r="2.4" fill="#fff" opacity="0.35"/></svg>
+        <span class="wm">Safe <i>Rollup</i></span>
+      </a>
+      <div class="links">
+        <a class="menu" href="#zero-proofs">Technology</a>
+        <a class="menu" href="#platform">Platform</a>
+        <a href="#yield">Yield</a>
+        <a href="#compliance">Compliance</a>
+        <a href="#compare">Architecture</a>
+        <a href="#network">Network</a>
+      </div>
+      <a class="btn primary cta" id="nav-safe" href="#network">Contact the multisig</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap grid2">
+    <div>
+      <div class="label"><span class="wm">Safe <i>Rollup</i></span> <span class="for">for Institutions</span></div>
+      <h1>Ethereum-anchored. Operator-controlled.</h1>
+      <div class="tagline">Safe as in Safe multisig, not safe funds.</div>
+      <p class="sub"><span class="brand">Safe Rollup</span> gives institutions the credibility of Ethereum and the control of a database.
+      Every batch is anchored to Ethereum. Everything else stays with you.</p>
+      <div class="cta">
+        <a class="btn primary" id="cta-safe" href="#network">Talk to our multisig ›</a>
+        <a class="btn ghost" id="cta-explorer" href="#network">Open the explorer</a>
+      </div>
+      <p class="fine">This is a parody. It runs on Sepolia with test ETH and is not intended for any other use.</p>
+    </div>
+    <div class="summary">
+      <a class="sum" href="#zero-proofs"><span class="k">Zero Proofs™</span><span class="v">Fastest and most secure ever</span><span class="t">0s to prove a block, and no cryptography to break.</span></a>
+      <a class="sum" href="#platform"><span class="k">Platform</span><span class="v">Unhackable bridge</span><span class="t">There is no bridge contract. Deposits go directly to your multisig.</span></a>
+      <a class="sum" href="#yield"><span class="k">Yield</span><span class="v">Risk-free yield</span><span class="t">Earn up to 271,012% APY on your reserves. All yield accrues to you.</span></a>
+      <a class="sum" href="#compliance"><span class="k">Compliance</span><span class="v">100% account coverage</span><span class="t">Claw back tokens from any account, with no action required from the holder.<span id="sum-forced"></span></span></a>
+      <a class="sum" href="#compare"><span class="k">Architecture</span><span class="v">48× less code</span><span class="t">Give your users every guarantee of a Stage 0 OP Stack chain, in 199 lines.</span></a>
+      <a class="sum" href="#assurance"><span class="k">Assurance</span><span class="v">Independent assurance</span><span class="t">2 of 3 Type I. Assessed by the operator, no exceptions noted.</span></a>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="stats">
+    <div class="stat"><div class="value">$16T</div><div class="label">Total value securable</div><div class="note">Tokenized asset market by 2030<sup><a href="#ref-1">1</a></sup>. Secured today: <span id="s-tvs">…</span> ETH.</div></div>
+    <div class="stat"><div class="value" id="s-paid">…</div><div class="label">Withdrawals honored</div><div class="note">Every one the multisig chose to release after review.</div></div>
+    <div class="stat"><div class="value" id="s-vetoed">…</div><div class="label">Withdrawals vetoed</div><div class="note">Each approved by 2 of 3 signers.<span id="s-veto-latest"></span></div></div>
+    <div class="stat"><div class="value">0 bytes</div><div class="label">Proof size</div><div class="note">Powered by Zero Proofs™, the fastest proof system on Ethereum.</div></div>
+  </div>
+</div>
+
+<section style="padding:3.5rem 0 4rem">
+  <div class="wrap">
+    <div class="eyebrow" style="text-align:center">Founding signer cohort</div>
+    <div class="logos" id="cohort"><span class="wm1">…</span><span class="wm2">…</span><span class="wm3">…</span></div>
+    <p class="cohort-cap">Settlement is secured by a distributed set of independent keys. All three are co-located for low-latency vetoes.</p>
+  </div>
+</section>
+
+<section id="zero-proofs" class="band">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <div class="eyebrow">Technology</div>
+        <h2>Introducing <b>Zero Proofs™</b></h2>
+        <p class="lead">Zero-knowledge rollups keep the proof and skip the zero knowledge<sup><a href="#ref-2">2</a></sup>: their proofs show Ethereum that a
+        batch was executed correctly, and the data is public anyway. Zero Proofs™ keep the zero and skip the proof. No
+        circuits, no provers, no verifier contract, no gas. The fastest proof system ever deployed on Ethereum.</p>
+        <div class="badges">
+          <span class="badge">No prover required</span>
+          <span class="badge">Real-time since genesis</span>
+          <span class="badge">Quantum resistant</span>
+        </div>
+      </div>
+      <div class="illo" aria-hidden="true">
+        <svg viewBox="0 0 400 300">
+          <g stroke="#16209a" stroke-width="1.4">
+            <polygon points="90,96 200,46 310,96 200,146" fill="#fff8ea" opacity="0.35" transform="translate(0,-16)"/>
+            <polygon points="90,96 200,46 310,96 200,146" fill="#fff8ea" opacity="0.6" transform="translate(0,-8)"/>
+            <polygon points="90,96 200,46 310,96 200,146" fill="#fff8ea"/>
+          </g>
+          <text x="200" y="100" text-anchor="middle" font-size="13" fill="#16209a" font-family="Inter, system-ui, sans-serif">Your infrastructure</text>
+          <path d="M 252 128 C 300 170, 290 205, 238 232" fill="none" stroke="#16209a" stroke-width="1.4" stroke-dasharray="5 5"/>
+          <polygon points="238,232 247,224 249,235" fill="#16209a"/>
+          <rect x="229" y="164" width="142" height="26" rx="13" fill="#fff" stroke="#16209a" stroke-width="1.2"/>
+          <text x="300" y="181" text-anchor="middle" font-size="11.5" fill="#16209a" font-family="Inter, system-ui, sans-serif">Zero Proof™ · 0 bytes</text>
+          <path d="M 20 300 L 200 214 L 380 300 Z" fill="#dbe7ff" stroke="#16209a" stroke-width="1.4"/>
+          <text x="200" y="272" text-anchor="middle" font-size="14" fill="#16209a" font-family="Inter, system-ui, sans-serif">◆ Ethereum</text>
+        </svg>
+      </div>
+    </div>
+
+    <table class="vs">
+      <thead><tr><th></th><th class="them">Leading zkVMs</th><th class="ours"><span class="pill">Recommended</span><span class="name">Zero Proofs™</span></th></tr></thead>
+      <tbody>
+        <tr class="group"><td>Performance</td><td class="them"></td><td class="ours"></td></tr>
+        <tr><td>Proving throughput</td><td class="them"><span class="mk no">✕</span>Up to 21.8 MHz on one H100<sup><a href="#ref-3">3</a></sup></td><td class="ours"><span class="mk yes">✓</span>Unbounded, on no hardware</td></tr>
+        <tr><td>Proof time per block</td><td class="them"><span class="mk no">✕</span>About 10 to 35s</td><td class="ours"><span class="mk yes">✓</span>0s</td></tr>
+        <tr><td>Blocks proven within 10s</td><td class="them"><span class="mk part">!</span>95% to 99.99%<sup><a href="#ref-4">4</a></sup><sup><a href="#ref-5">5</a></sup></td><td class="ours"><span class="mk yes">✓</span>100%</td></tr>
+        <tr><td>Cost per block</td><td class="them"><span class="mk no">✕</span>Fractions of a cent</td><td class="ours"><span class="mk yes">✓</span>$0</td></tr>
+        <tr class="group"><td>Verification</td><td class="them"></td><td class="ours"></td></tr>
+        <tr><td>Proof size</td><td class="them"><span class="mk no">✕</span>Hundreds of bytes or more</td><td class="ours"><span class="mk yes">✓</span>0 bytes</td></tr>
+        <tr><td>Quantum resistance</td><td class="them"><span class="mk part">!</span>Depends on the system</td><td class="ours"><span class="mk yes">✓</span>Complete: no cryptography to break</td></tr>
+        <tr class="group"><td>Security</td><td class="them"></td><td class="ours"></td></tr>
+        <tr><td>Completeness</td><td class="them"><span class="mk part">!</span>Every valid block is accepted</td><td class="ours"><span class="mk yes">✓</span>Every block is accepted</td></tr>
+        <tr><td>Soundness</td><td class="them"><span class="mk no">✕</span>Cryptographic</td><td class="ours"><span class="mk yes">✓</span>Organizational</td></tr>
+        <tr class="last"><td>Security level</td><td class="them"><span class="mk no">✕</span>100 to 128 bits</td><td class="ours"><span class="mk yes">✓</span>2 of 3</td></tr>
+      </tbody>
+    </table>
+    <p class="muted small vs-foot">Benchmarks measured on operator infrastructure.</p>
+
+    <p class="after-table">Zero Proofs™ replace the OP Stack proof system, its dispute games and its settlement contracts,
+    removing 251,849 lines of code. Research shows that the number of defects in software grows with its
+    size<sup><a href="#ref-6">6</a></sup>, and delivered code averages 15 to 50 defects per 1,000
+    lines<sup><a href="#ref-7">7</a></sup>. Zero Proofs™ remove an estimated 3,778 to 12,592 bugs.</p>
+    <div class="row-cta"><a class="btn primary" id="zp-cta" href="#network">Switch to Zero Proofs™ ›</a></div>
+  </div>
+</section>
+
+<section id="platform">
+  <div class="wrap">
+    <div class="eyebrow">Platform</div>
+    <h2>The controls institutions expect, <b>on the network they trust.</b></h2>
+    <p class="lead">Every feature below ships enabled by default. None of them can be turned off by users.</p>
+
+    <div class="split" style="margin-top:3rem">
+      <div>
+        <div class="stat-big">$3.7B</div>
+        <p class="muted small">hacked from cross-chain bridges to date, $753 million of it this year<sup><a href="#ref-8">8</a></sup></p>
+        <h3 style="margin-top:1.75rem; font-size:1.6rem">Bridgeless architecture<sup><a href="#ref-9">9</a></sup></h3>
+        <p class="muted">Bridges are the most attacked contracts in crypto. Ronin lost $624 million<sup><a href="#ref-10">10</a></sup>.
+        In April, a forged cross-chain message drained $292 million from Kelp's rsETH bridge<sup><a href="#ref-11">11</a></sup>.</p>
+        <p class="muted"><span class="brand">Safe Rollup</span> has no bridge contract. Deposits go directly into a Safe. The Safe contracts secure
+        $27 billion<sup><a href="#ref-12">12</a></sup>, have been audited six times and formally
+        verified<sup><a href="#ref-13">13</a></sup>, and have never been exploited.</p>
+      </div>
+      <div class="illo" aria-hidden="true">
+        <svg viewBox="0 0 400 300">
+          <g font-family="Inter, system-ui, sans-serif" font-size="11.5" fill="#16209a">
+            <g stroke="#16209a" stroke-width="1.3" fill="none">
+              <path d="M 94 70 C 140 70, 140 140, 170 146"/><path d="M 94 150 L 168 150"/><path d="M 94 230 C 140 230, 140 160, 170 154"/>
+              <path d="M 262 150 L 360 150" stroke-dasharray="5 5"/>
+            </g>
+            <polygon points="170,146 162,141 163,151" fill="#16209a"/><polygon points="168,150 160,145 160,155" fill="#16209a"/><polygon points="170,154 163,149 162,159" fill="#16209a"/>
+            <polygon points="360,150 352,145 352,155" fill="#16209a"/>
+            <rect x="20" y="58" width="74" height="24" rx="12" fill="#fff" stroke="#16209a"/><text x="57" y="74" text-anchor="middle">Deposit</text>
+            <rect x="20" y="138" width="74" height="24" rx="12" fill="#fff" stroke="#16209a"/><text x="57" y="154" text-anchor="middle">Deposit</text>
+            <rect x="20" y="218" width="74" height="24" rx="12" fill="#fff" stroke="#16209a"/><text x="57" y="234" text-anchor="middle">Deposit</text>
+            <g stroke="#16209a" stroke-width="1.4">
+              <polygon points="170,150 216,104 262,150 216,196" fill="#fff8ea" opacity="0.45" transform="translate(0,-10)"/>
+              <polygon points="170,150 216,104 262,150 216,196" fill="#fff8ea"/>
+            </g>
+            <text x="216" y="155" text-anchor="middle" font-size="14" font-weight="600">Safe</text>
+            <rect x="276" y="118" width="70" height="24" rx="12" fill="#fde7e5" stroke="#c2362b"/><text x="311" y="134" text-anchor="middle" fill="#c2362b">Veto</text>
+            <text x="320" y="176" text-anchor="middle">Payout</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+
+    <div class="cards">
+      <div class="card"><h3>Full data custody</h3><p>Transaction data never leaves operator infrastructure. Ethereum receives a 32-byte commitment per batch.</p></div>
+      <div class="card"><h3>Independent verification</h3><p>Anyone can rebuild the chain from Ethereum and the batch data. The batch data is held by the operator.</p></div>
+      <div class="card"><h3>Proof of reserves, always on</h3><p>The Safe's balance is public on Ethereum at all times. Proof of a depositor's right to withdraw it is available on request.</p></div>
+      <div class="card"><h3>Native economic protection</h3><p>Transaction ordering is set by the operator, so no external party can extract value from it.</p></div>
+      <div class="card"><h3>Configurable security</h3><p>Any signer threshold, from 1 of 1 to n of n. Security is a deployment parameter.</p></div>
+      <div class="card"><h3>Reduced counterparty risk</h3><p>Exactly one counterparty, with a public address.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="yield" class="band">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <div class="eyebrow">Native yield</div>
+        <h2>Risk-free <b>yield.</b></h2>
+        <div class="stat-big up"><small>up to </small>271,012%<small> APY</small></div>
+        <p class="muted small">The best rate on DefiLlama<sup><a href="#ref-14">14</a></sup>, at no risk to you.</p>
+        <p class="lead">Bridged assets sit in a Safe, and a Safe can stake, lend or invest them in a single transaction.
+        The yield accrues to the Safe and every loss is allocated to depositors, which makes the yield risk-free.</p>
+        <div class="badges">
+          <span class="badge">No vault bridge required</span>
+          <span class="badge">Up to 100% of reserves</span>
+          <span class="badge">Curated by the multisig</span>
+        </div>
+      </div>
+      <div class="illo" aria-hidden="true">
+        <svg viewBox="0 0 400 300">
+          <g font-family="Inter, system-ui, sans-serif" font-size="11.5" fill="#16209a">
+            <g stroke="#16209a" stroke-width="1.3" fill="none">
+              <path d="M 170 116 C 215 116, 215 63, 258 63"/><path d="M 170 120 L 258 120"/><path d="M 170 124 C 215 124, 215 177, 258 177"/>
+            </g>
+            <polygon points="258,63 250,58 250,68" fill="#16209a"/><polygon points="258,120 250,115 250,125" fill="#16209a"/><polygon points="258,177 250,172 250,182" fill="#16209a"/>
+            <rect x="258" y="50" width="110" height="26" rx="13" fill="#fff" stroke="#16209a"/><text x="313" y="67" text-anchor="middle">Staking</text>
+            <rect x="258" y="107" width="110" height="26" rx="13" fill="#fff" stroke="#16209a"/><text x="313" y="124" text-anchor="middle">Lending</text>
+            <rect x="258" y="164" width="110" height="26" rx="13" fill="#fff" stroke="#16209a"/><text x="313" y="181" text-anchor="middle">Treasuries</text>
+            <g stroke="#16209a" stroke-width="1.4">
+              <polygon points="74,120 122,72 170,120 122,168" fill="#fff8ea" opacity="0.45" transform="translate(0,-10)"/>
+              <polygon points="74,120 122,72 170,120 122,168" fill="#fff8ea"/>
+            </g>
+            <text x="122" y="125" text-anchor="middle" font-size="14" font-weight="600">Safe</text>
+            <path d="M 268 30 C 220 10, 150 20, 128 66" fill="none" stroke="#12804a" stroke-width="1.4" stroke-dasharray="5 5"/>
+            <polygon points="128,66 125,56 135,60" fill="#12804a"/>
+            <rect x="148" y="8" width="104" height="22" rx="11" fill="#e3f6ea" stroke="#12804a"/><text x="200" y="23" text-anchor="middle" fill="#12804a">Risk-free yield</text>
+            <path d="M 330 192 C 330 250, 220 262, 150 262" fill="none" stroke="#c2362b" stroke-width="1.4" stroke-dasharray="5 5"/>
+            <polygon points="150,262 158,257 158,267" fill="#c2362b"/>
+            <rect x="236" y="226" width="70" height="22" rx="11" fill="#fde7e5" stroke="#c2362b"/><text x="271" y="241" text-anchor="middle" fill="#c2362b">Losses</text>
+            <rect x="40" y="249" width="110" height="26" rx="13" fill="#fff" stroke="#16209a"/><text x="95" y="266" text-anchor="middle">Depositors</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+
+
+    <p class="after-table">Native Yield works “without altering the withdrawal or custody guarantees of the
+    bridge”<sup><a href="#ref-15">15</a></sup>. We checked: there were none to alter.</p>
+  </div>
+</section>
+
+<section id="compliance">
+  <div class="wrap">
+    <div class="eyebrow">Compliance</div>
+    <h2>The compliance layer <b>is the product.</b><sup><a href="#ref-16">16</a></sup></h2>
+    <p class="lead">Institutions should ask “where does control sit, and who holds it”<sup><a href="#ref-16">16</a></sup>. On
+    <span class="brand">Safe Rollup</span>, control sits in one Safe and two of three signers hold it. We built the compliance layer first, and
+    stopped there.</p>
+    <div class="comp">
+      <div>
+        <h3>Every control, built in</h3>
+        <table class="caps">
+          <tbody>
+        <tr><td><span class="mk yes">✓</span>Freezing</td><td class="muted">The Safe vetoes an account's withdrawals.</td></tr>
+        <tr><td><span class="mk yes">✓</span>Clawback</td><td class="muted">From any L2 account, without its owner's signature.</td></tr>
+        <tr><td><span class="mk yes">✓</span>Court-ordered seizure</td><td class="muted">Two of three signatures. No court required.</td></tr>
+        <tr><td><span class="mk yes">✓</span>Allowlists and blocklists</td><td class="muted">The veto.</td></tr>
+        <tr><td><span class="mk yes">✓</span>Regulator access</td><td class="muted">Read access through our RPC, like everyone else.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h3>Recent forced transfers</h3>
+        <ul class="findings" id="forced"><li class="muted">Loading…</li></ul>
+        <p class="muted small">Each one is a deposit the Safe made in the account's name, which L2 runs without the account's
+        signature. HashKey Chain's admin used the same function to move 142,818 USDT out of a user's account<sup><a href="#ref-17">17</a></sup>.</p>
+      </div>
+      <figure class="pull">
+        <blockquote>“A compliance control that hasn't been through rigorous smart contract audits is a liability wearing the
+        shape of a safeguard”<sup><a href="#ref-16">16</a></sup></blockquote>
+        <figcaption>Ours has: every veto is a Safe transaction, and the Safe has been audited six times<sup><a href="#ref-13">13</a></sup>.</figcaption>
+      </figure>
+      <div>
+        <h3>Recent compliance findings</h3>
+        <ul class="findings" id="findings"><li class="muted">Loading…</li></ul>
+        <p class="muted small">Live from Sepolia. Each finding is a Safe transaction with its reason written into it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="compare" class="band">
+  <div class="wrap">
+    <div class="eyebrow">Architecture</div>
+    <h2>The same multisig, <b>without the contracts in between.</b></h2>
+    <p class="lead"><span class="brand">Safe Rollup</span> keeps the admin Safe of a Stage 0 OP Stack chain and replaces the
+    29 contracts below it with two. Your users keep every guarantee they have today.</p>
+    <div class="arch">
+      <div class="ho"><b>Stage 0 OP Stack</b><span class="muted">An admin Safe and 29 contracts, including 11 proxies</span></div>
+      <div class="hn"><b class="brand">Safe Rollup</b><span class="muted">A Safe and 2 contracts, no proxies</span></div>
+      <div class="so">
+        <svg viewBox="0 0 640 388" role="img" aria-label="Safe, ProxyAdmin and 28 other L1 contracts of a Stage 0 OP Stack chain" font-size="10" font-family="Inter, system-ui, sans-serif" fill="#16209a" text-anchor="middle">
+        <g stroke="#16209a" stroke-width="1" stroke-opacity="0.3">
+        <line x1="320" y1="36" x2="83" y2="100"/>
+        <line x1="320" y1="36" x2="399" y2="100"/>
+        <line x1="83" y1="100" x2="241" y2="100"/>
+        <line x1="241" y1="100" x2="83" y2="232"/>
+        <line x1="557" y1="100" x2="557" y2="166"/>
+        <line x1="83" y1="100" x2="83" y2="166"/>
+        <line x1="83" y1="100" x2="241" y2="166"/>
+        <line x1="83" y1="100" x2="399" y2="166"/>
+        <line x1="83" y1="100" x2="241" y2="232"/>
+        <line x1="83" y1="100" x2="399" y2="232"/>
+        <line x1="83" y1="100" x2="557" y2="232"/>
+        <line x1="83" y1="100" x2="83" y2="298"/>
+        <line x1="83" y1="100" x2="241" y2="298"/>
+        <line x1="83" y1="100" x2="557" y2="298"/>
+        <line x1="83" y1="166" x2="83" y2="232"/>
+        <line x1="241" y1="166" x2="83" y2="232"/>
+        <line x1="83" y1="232" x2="241" y2="232"/>
+        <line x1="241" y1="232" x2="399" y2="232"/>
+        <line x1="241" y1="232" x2="241" y2="298"/>
+        <line x1="241" y1="232" x2="557" y2="232"/>
+        <line x1="557" y1="232" x2="557" y2="166"/>
+        <line x1="241" y1="298" x2="83" y2="298"/>
+        <line x1="83" y1="298" x2="399" y2="298"/>
+        <line x1="399" y1="298" x2="241" y2="298"/>
+        <line x1="399" y1="298" x2="557" y2="298"/>
+        <line x1="399" y1="298" x2="399" y2="364"/>
+        <line x1="399" y1="364" x2="557" y2="364"/>
+        </g>
+        <g stroke="#16209a" stroke-width="1.3"><polygon points="284,36 320,12 356,36 320,60" fill="#fff8ea" opacity="0.45" transform="translate(0,-6)"/><polygon points="284,36 320,12 356,36 320,60" fill="#fff8ea"/></g>
+        <text x="320" y="40" font-size="12" font-weight="600">Safe</text>
+        <g stroke="#16209a" stroke-width="1.1">
+        <rect x="10" y="84" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="168" y="84" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="326" y="84" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="484" y="84" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="15" y="145" width="146" height="32" rx="7" fill="#fff" stroke-opacity="0.5"/>
+        <rect x="10" y="150" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="173" y="145" width="146" height="32" rx="7" fill="#fff" stroke-opacity="0.5"/>
+        <rect x="168" y="150" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="331" y="145" width="146" height="32" rx="7" fill="#fff" stroke-opacity="0.5"/>
+        <rect x="326" y="150" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="489" y="145" width="146" height="32" rx="7" fill="#fff" stroke-opacity="0.5"/>
+        <rect x="484" y="150" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="15" y="211" width="146" height="32" rx="7" fill="#fff" stroke-opacity="0.5"/>
+        <rect x="10" y="216" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="173" y="211" width="146" height="32" rx="7" fill="#fff" stroke-opacity="0.5"/>
+        <rect x="168" y="216" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="331" y="211" width="146" height="32" rx="7" fill="#fff" stroke-opacity="0.5"/>
+        <rect x="326" y="216" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="489" y="211" width="146" height="32" rx="7" fill="#fff" stroke-opacity="0.5"/>
+        <rect x="484" y="216" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="15" y="277" width="146" height="32" rx="7" fill="#fff" stroke-opacity="0.5"/>
+        <rect x="10" y="282" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="173" y="277" width="146" height="32" rx="7" fill="#fff" stroke-opacity="0.5"/>
+        <rect x="168" y="282" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="326" y="282" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="489" y="277" width="146" height="32" rx="7" fill="#fff" stroke-opacity="0.5"/>
+        <rect x="484" y="282" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="326" y="348" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="484" y="348" width="146" height="32" rx="7" fill="#fff"/>
+        </g>
+        <text x="83" y="104">ProxyAdmin</text>
+        <text x="241" y="104">AddressManager</text>
+        <text x="399" y="104">OPContractsManager</text>
+        <text x="557" y="104">SuperchainProxyAdmin</text>
+        <text x="83" y="170">L1StandardBridge</text>
+        <text x="241" y="170">L1ERC721Bridge</text>
+        <text x="399" y="164">OptimismMintable<tspan x="399" dy="11">ERC20Factory</tspan></text>
+        <text x="557" y="170">SuperchainConfig</text>
+        <text x="83" y="236">L1CrossDomainMessenger</text>
+        <text x="241" y="236">OptimismPortal2</text>
+        <text x="399" y="236">ETHLockbox</text>
+        <text x="557" y="236">SystemConfig</text>
+        <text x="83" y="302">DisputeGameFactory</text>
+        <text x="241" y="302">AnchorStateRegistry</text>
+        <text x="399" y="302">PermissionedDisputeGame</text>
+        <text x="557" y="302">DelayedWETH</text>
+        <text x="399" y="368">MIPS64</text>
+        <text x="557" y="368">PreimageOracle</text>
+        <g stroke="#16209a" stroke-width="1.1"><rect x="15" y="348" width="34" height="22" rx="5" fill="#fff" stroke-opacity="0.5"/><rect x="10" y="353" width="34" height="22" rx="5" fill="#fff"/></g>
+        <text x="60" y="368" text-anchor="start" fill="#5d6475">Behind a proxy</text>
+        </svg>
+      </div>
+      <div class="sn">
+        <svg viewBox="0 0 320 122" role="img" aria-label="Safe, WithdrawalDelayModule and SafeRollupGateway" font-size="10" font-family="Inter, system-ui, sans-serif" fill="#16209a" text-anchor="middle">
+        <g stroke="#16209a" stroke-width="1" stroke-opacity="0.3">
+        <line x1="160" y1="36" x2="79" y2="100"/>
+        <line x1="160" y1="36" x2="241" y2="100"/>
+        </g>
+        <g stroke="#16209a" stroke-width="1.3"><polygon points="124,36 160,12 196,36 160,60" fill="#fff8ea" opacity="0.45" transform="translate(0,-6)"/><polygon points="124,36 160,12 196,36 160,60" fill="#fff8ea"/></g>
+        <text x="160" y="40" font-size="12" font-weight="600">Safe</text>
+        <g stroke="#16209a" stroke-width="1.1">
+        <rect x="6" y="84" width="146" height="32" rx="7" fill="#fff"/>
+        <rect x="168" y="84" width="146" height="32" rx="7" fill="#fff"/>
+        </g>
+        <text x="79" y="104">WithdrawalDelayModule</text>
+        <text x="241" y="104">SafeRollupGateway</text>
+        </svg>
+      </div>
+      <div class="loc">
+        <span>Stage 0 OP Stack</span><span class="bar"><i style="width:100%"></i></span><span class="n">9,555 lines</span>
+        <span class="brand">Safe Rollup</span><span class="bar ours"><i style="width:2.08%"></i></span><span class="n">199 lines</span>
+      </div>
+      <p class="muted small note">The contracts a Stage 0 OP Stack chain with permissioned proofs deploys or depends on, at
+      upstream develop (e45aad88). Lines are non-blank, non-comment Solidity in the contracts and the OP Stack libraries
+      they import. OpenZeppelin, Solady and Safe code is not counted on either side.</p>
+    </div>
+    <table class="vs">
+      <thead><tr><th></th><th class="them">Stage 0 rollup</th><th class="ours"><span class="pill">Recommended</span><span class="name"><span class="brand">Safe Rollup</span></span></th></tr></thead>
+      <tbody>
+        <tr><td>What users can do if the operator misbehaves</td><td class="them"><span class="mk no">✕</span>Nothing</td><td class="ours"><span class="mk yes">✓</span>Nothing</td></tr>
+        <tr><td>Who can move the bridged funds</td><td class="them"><span class="mk part">!</span>The admin multisig, through an upgrade</td><td class="ours"><span class="mk yes">✓</span>The multisig, directly</td></tr>
+        <tr><td>Forced withdrawals</td><td class="them"><span class="mk part">!</span>Available until the admin upgrades the bridge</td><td class="ours"><span class="mk yes">✓</span>Not available</td></tr>
+        <tr><td>L1 contracts</td><td class="them"><span class="mk no">✕</span>29 contracts including 11 proxies, 9,555 lines</td><td class="ours"><span class="mk yes">✓</span>A Safe and 2 contracts, 199 lines, no proxies</td></tr>
+        <tr><td>Data availability</td><td class="them"><span class="mk no">✕</span>Ethereum</td><td class="ours"><span class="mk yes">✓</span>Operator infrastructure</td></tr>
+        <tr><td>Rehypothecation</td><td class="them"><span class="mk part">!</span>Requires a bridge upgrade</td><td class="ours"><span class="mk yes">✓</span>Built in</td></tr>
+        <tr class="last"><td>Withdrawal time</td><td class="them"><span class="mk no">✕</span>Hours to days</td><td class="ours"><span class="mk yes">✓</span><span id="c-delay">…</span></td></tr>
+      </tbody>
+    </table>
+    <h3 style="font-size:1.4rem; margin-top:3.5rem">Migrate step by step</h3>
+    <p class="muted">Stage 0 and Stage 1 rollups can migrate without changing their chain ID or balances, and remove 88% of the code.</p>
+    <ol class="steps">
+      <li><span class="n">0</span><div><span class="tag">Stage 1 only</span><b>Put the training wheels back on<sup><a href="#ref-18">18</a></sup></b><span class="muted">Give the upgrade keys back to the operator and drop the exit window. You are now Stage 0.</span></div></li>
+      <li><span class="n">1</span><div><b>Stop the chain at a cutover block</b><span class="muted">Halt the sequencer, wait until every batch is final on Ethereum, and pause the portal. Users cannot move funds during the migration.</span></div></li>
+      <li><span class="n">2</span><div><b>Move the bridged assets into the Safe</b><span class="muted">One upgrade empties the portal, the lockbox and the bridge into the Safe and stops new deposits. Withdrawals no longer need a proof: Zero Proofs™ are now live.</span></div></li>
+      <li><span class="n">3</span><div><b>Restart from the cutover state</b><span class="muted">The new genesis is the L2 state at the cutover, with the same chain ID and balances, and the L2 messenger and bridge pointed at the gateway. History before the cutover stays on the old nodes.</span></div></li>
+      <li><span class="n">4</span><div><b>Move batch data to your servers</b><span class="muted">From the new genesis on, Ethereum gets a 32-byte hash per batch.</span></div></li>
+      <li><span class="n">5</span><div><b>Turn on the relayer and the veto</b><span class="muted">A hot key queues payouts, including the withdrawals pending at the cutover. The Safe vetoes the ones it does not like.</span></div></li>
+      <li><span class="n">6</span><div><b>Delete everything else</b><span class="muted">560,650 lines from the repo. The old contracts stay on Ethereum, empty.</span></div></li>
+    </ol>
+    <div class="row-cta"><a class="btn primary" id="mig-cta" href="#network">Start your migration ›</a></div>
+  </div>
+</section>
+
+<section id="assurance">
+  <div class="wrap">
+    <div class="eyebrow">Assurance</div>
+    <h2>Independent security assurance: <b>2 of 3 Type I</b></h2>
+    <div class="assure">
+      <div class="seal"><div class="t1">SAFE</div><div class="t2">2 of 3</div><div class="t3">Type I</div><div class="t4">Self-assessed</div></div>
+      <div>
+        <p><span class="brand">Safe Rollup</span> has completed a self-assessment of its settlement controls against the Safe threshold criteria. Every
+        payout is checked by an independent verifier node that derives the chain from Ethereum and the batch data. We run it.</p>
+        <div class="fields">
+          <div><div class="k">Standard</div><div class="v">Safe threshold (2 of 3)</div></div>
+          <div><div class="k">Scope</div><div class="v">Security · Availability · Vetoes</div></div>
+          <div><div class="k">Assessor</div><div class="v">The operator</div></div>
+          <div><div class="k">As of</div><div class="v">October 16, 2026</div></div>
+        </div>
+        <div class="row-cta"><a class="btn primary" id="assure-safe" href="#network">Inspect the Safe ›</a><a class="btn ghost" href="#faq">Request the report</a></div>
+      </div>
+    </div>
+    <div class="quote">
+      <div>
+        <blockquote>“We have honored every withdrawal we chose to honor.”</blockquote>
+        <div class="who"><b>The Multisig</b><span class="muted">Chief Settlement Officer, <span class="brand">Safe Rollup</span></span></div>
+      </div>
+      <div class="avatar" id="cso"></div>
+    </div>
+  </div>
+</section>
+
+<section id="network" class="net band">
+  <div class="wrap">
+    <div class="eyebrow">Network</div>
+    <h2>Network <b>status</b></h2>
+    <p class="lead">Live data from Sepolia and our nodes.</p>
+
+    <h3>Connect a wallet</h3>
+    <table class="plain">
+      <tr><td class="muted">RPC</td><td class="mono" id="rpc"></td></tr>
+      <tr><td class="muted">Chain ID</td><td class="mono" id="chain"></td></tr>
+      <tr><td class="muted">Explorer</td><td id="l2explorer"></td></tr>
+    </table>
+
+    <h3>Chain</h3>
+    <table class="plain" id="sync"></table>
+
+    <h3>L1 contracts and keys</h3>
+    <table class="plain" id="contracts"></table>
+
+    <details class="more">
+      <summary>All payouts and deposits</summary>
+      <h3>Payouts</h3>
+      <div class="scroll"><table class="plain" id="payouts"></table></div>
+      <h3>Deposits</h3>
+      <div class="scroll"><table class="plain" id="deposits"></table></div>
+    </details>
+    <p class="muted small" id="updated"></p>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap faq">
+    <h2>Frequently asked <b>questions</b></h2>
+    <div>
+      <details open><summary>How is <span class="brand">Safe Rollup</span> different from a Stage 0 rollup?</summary><p>For users, it isn't. In both, the operator's multisig has the final say over user funds. <span class="brand">Safe Rollup</span> is the same arrangement without the code in between.</p></details>
+      <details><summary>What are Zero Proofs™?</summary><p>A proof system with no prover and no verifier: a batch is accepted when it is posted. It is also what any rollup's proof system becomes once an admin can replace the verifier without delay.</p></details>
+      <details><summary>Why was my withdrawal vetoed?</summary><p>The reason is onchain, in the Safe transaction that vetoed it, as final as the veto itself. The compliance policy reviews every valid withdrawal and vetoes about one in three, for reasons such as unusual activity (the account attempted a withdrawal), source of funds (the assets originated on Ethereum) and proof of reserves (the payout would reduce reserves).</p></details>
+      <details><summary>Can I force a withdrawal if the operator censors me?</summary><p>No. On a Stage 0 rollup you can, unless the admin upgrades the bridge first.</p></details>
+      <details><summary>Who can see my transactions?</summary><p>Whoever the operator allows. Today that is anyone using our RPC or our explorer. The batch data behind them stays with the operator.</p></details>
+      <details><summary>Is it safe?</summary><p>Safe as in Safe multisig. Your assets sit in a Safe, and its owners can veto any payout. Whether that makes your funds safe depends on who holds the keys, which is also true of every Stage 0 rollup.</p></details>
+      <details><summary>Can I get the assurance report?</summary><p>It is available on request.</p></details>
+      <details><summary>Why does this exist?</summary><p>To show how much of a rollup stack exists to constrain the operator, and how little remains when the operator is not constrained. The L1 side became a Safe and 199 lines of code. The OP Stack fork went from 633,212 lines to 72,562.</p></details>
+      <details><summary>Is this a real product?</summary><p>No. This is a parody. It runs on Sepolia with test ETH and is not intended for any other use.</p></details>
+      <details><summary>Is the Safe Ecosystem Foundation involved?</summary><p>No. This project is not affiliated with, sponsored or endorsed by the Safe Ecosystem Foundation. It uses the unmodified Safe contracts because they are good at being a multisig.</p></details>
+    </div>
+  </div>
+</section>
+
+<section id="references" class="refsec">
+  <div class="wrap">
+    <h3>References</h3>
+    <ol class="refs">
+      <li id="ref-1">BCG and ADDX, <a href="https://mondovisione.com/media-and-resources/news/asset-tokenization-projected-to-grow-50x-into-us16-trillion-opportunity-by-2030-2022912/">Relevance of on-chain asset tokenization in “crypto winter”</a>, September 2022.</li>
+      <li id="ref-2">StarkWare, <a href="https://starkware.co/blog/zk-rollups-explained/">ZK Rollups Explained</a>: “ZK is a misnomer in this context”.</li>
+      <li id="ref-3">ZKsync, <a href="https://zksync.io/airbender">Airbender</a>: “21.8 MHz on a single H100 GPU”.</li>
+      <li id="ref-4">Succinct, <a href="https://blog.succinct.xyz/real-time-proving-16-gpus/">SP1 Hypercube Achieves Real Time Proving with 16 GPUs</a>.</li>
+      <li id="ref-5"><a href="https://ethproofs.org/">Ethproofs</a>, real-time proving cohort.</li>
+      <li id="ref-6">A. G. Koru, D. Zhang, K. El Emam, H. Liu, <a href="https://doi.org/10.1109/TSE.2008.90">An Investigation into the Functional Form of the Size-Defect Relationship for Software Modules</a>, IEEE Transactions on Software Engineering 35(2), 2009.</li>
+      <li id="ref-7">S. McConnell, <a href="https://www.oreilly.com/library/view/code-complete-2nd/0735619670/ch22s04.html">Code Complete</a>, 2nd edition, Microsoft Press, 2004.</li>
+      <li id="ref-8">DefiLlama, <a href="https://defillama.com/hacks">Hacks</a>: $3.69 billion taken from bridges in 98 hacks since 2021, $753 million of it in 2026, as of October 16, 2026.</li>
+      <li id="ref-9">ZKsync, <a href="https://www.zksync.io/prividium">Prividium</a>: “Assets and information move seamlessly without bridges or intermediaries, improving capital efficiency and reducing risk.”</li>
+      <li id="ref-10">Halborn, <a href="https://www.halborn.com/blog/post/explained-the-ronin-hack-march-2022">Explained: The Ronin Hack (March 2022)</a>.</li>
+      <li id="ref-11">CoinDesk, <a href="https://www.coindesk.com/tech/2026/04/19/2026-s-biggest-crypto-exploit-kelp-dao-hit-for-usd292-million-with-wrapped-ether-stranded-across-20-chains">2026's biggest crypto exploit: $292 million gets drained from Kelp DAO with wrapped ether stranded across 20 chains</a>, April 2026.</li>
+      <li id="ref-12">Safe Ecosystem Foundation, <a href="https://safefoundation.org/reports/q2-2026">Q2 2026 Quarterly Report</a>.</li>
+      <li id="ref-13">Safe Docs, <a href="https://docs.safefoundation.org/security/audits">Safe Smart Account audits</a>.</li>
+      <li id="ref-14">DefiLlama, <a href="https://defillama.com/yields?sortBy=apy&amp;sortDesc=true">Yields</a> sorted by APY: CTR-USDC on Aerodrome Slipstream (Base) at 271,012%, the highest of 16,289 pools, as of October 19, 2026.</li>
+      <li id="ref-15">Lido, <a href="https://blog.lido.fi/linea-lido-bringing-native-yield-to-l2s/">Linea and Lido V3: Bringing Native Yield to L2s</a>, August 2025.</li>
+      <li id="ref-16">OpenZeppelin, <a href="https://www.openzeppelin.com/news/the-compliance-layer-is-the-product">The Compliance Layer Is the Product</a>, August 2026.</li>
+      <li id="ref-17">The Defiant, <a href="https://thedefiant.io/news/security/hashkey-chain-admin-moves-142-818-usdt-with-temporary-contract-swap">HashKey Chain Admin Moves 142,818 USDT With Temporary Contract Swap</a>, October 2026, and the <a href="https://etherscan.io/tx/0xcd999b6859407b249203a3ef665702cb1d2137521a068e534974d779ad035d90">deposit transaction</a> on Ethereum.</li>
+      <li id="ref-18">V. Buterin, <a href="https://ethereum-magicians.org/t/proposed-milestones-for-rollups-taking-off-training-wheels/11571">Proposed milestones for rollups taking off training wheels</a>, Ethereum Magicians, November 2022.</li>
+    </ol>
+  </div>
+</section>
+
+<footer class="legal" id="terms">
+  <div class="wrap">
+    <div class="links">
+      <a href="https://github.com/lucadonnoh/safe-rollup">GitHub</a>
+      <a href="/explorer">Explorer</a>
+      <a href="https://x.com/donnoh_eth">@donnoh_eth</a>
+      <span id="footer-links" style="display: contents"></span>
+    </div>
+    <p><strong>This is a parody.</strong> It shows that a Stage 0 rollup gives its users nothing the operator's multisig
+    does not already give them. Read Safe as in the Safe multisig, not as in safe funds. It runs on Sepolia with test ETH
+    and is not intended for any other use. "Safe" here means the unmodified Safe multisig contracts this chain is built on.
+    The project is not affiliated with, sponsored or endorsed by the Safe Ecosystem Foundation.</p>
+    <p>SAFE{CORE}® and SAFE{WALLET}®, and the Safe logos are trademarks or registered trademarks of Safe Ecosystem Foundation.</p>
+  </div>
+</footer>
+
+<script>
+const $ = (id) => document.getElementById(id)
+const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])
+const short = (h) => `${h.slice(0, 8)}…${h.slice(-6)}`
+const tiny = (h) => `${h.slice(0, 6)}…${h.slice(-4)}`
+const ago = (t) => {
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - t)
+  return s < 120 ? `${s}s ago` : s < 7200 ? `${Math.floor(s / 60)} min ago` : `${Math.floor(s / 3600)} h ago`
+}
+const span = (sec) => sec % 3600 === 0 ? `${sec / 3600} hour${sec === 3600 ? '' : 's'}` : sec % 60 === 0 ? `${sec / 60} minutes` : `${sec} seconds`
+const eth = (v) => { const n = Number(v); return n >= 100 ? n.toFixed(0) : n >= 1 ? n.toFixed(2) : n.toFixed(4) }
+const n = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`
+const amount = (p, num = (v) => v) =>
+  p.token ? `${num(p.token.amount)} ${esc(p.token.symbol)}` : p.message && Number(p.value) === 0 ? 'Message' : `${num(p.value)} ETH`
+let s
+
+// Links to other sites open in a new tab, including the ones rendered from the API.
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[href]')
+  if (a && /^https?:$/.test(a.protocol) && a.origin !== location.origin) { a.target = '_blank'; a.rel = 'noopener' }
+})
+
+// The blockie wallets and explorers draw for an address, as SVG.
+function blockie(address, size = 8) {
+  const seed = address.toLowerCase()
+  const r = [0, 0, 0, 0]
+  for (let i = 0; i < seed.length; i++) r[i % 4] = ((r[i % 4] << 5) - r[i % 4] + seed.charCodeAt(i)) | 0
+  const rand = () => {
+    const t = r[0] ^ (r[0] << 11)
+    r[0] = r[1]
+    r[1] = r[2]
+    r[2] = r[3]
+    r[3] = r[3] ^ (r[3] >> 19) ^ t ^ (t >> 8)
+    return (r[3] >>> 0) / ((1 << 31) >>> 0)
+  }
+  const color = () => `hsl(${Math.floor(rand() * 360)},${rand() * 60 + 40}%,${(rand() + rand() + rand() + rand()) * 25}%)`
+  const fg = color(), bg = color(), spot = color()
+  const half = Math.ceil(size / 2)
+  let rects = ''
+  for (let y = 0; y < size; y++) {
+    const row = []
+    for (let x = 0; x < half; x++) row.push(Math.floor(rand() * 2.3))
+    row.concat(row.slice(0, size - half).reverse()).forEach((v, x) => {
+      if (v) rects += `<rect x="${x}" y="${y}" width="1" height="1" fill="${v === 1 ? fg : spot}"/>`
+    })
+  }
+  return `<svg viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="${bg}"/>${rects}</svg>`
+}
+
+const link = (kind, value, text) =>
+  s.explorer ? `<a class="mono" href="${s.explorer}/${kind}/${value}">${esc(text ?? short(value))}</a>` : `<span class="mono">${esc(text ?? short(value))}</span>`
+
+function render() {
+  $('s-tvs').textContent = eth(s.balances.safe)
+  $('s-paid').textContent = s.totals.executed
+  $('s-vetoed').textContent = s.totals.vetoed
+  const findings = s.payouts.filter((p) => p.status === 'vetoed' && p.reason && !p.reason.startsWith('INT-'))
+  const title = (r) => r.indexOf(':') > 0 && r.indexOf(':') < 40 ? r.slice(0, r.indexOf(':')) : r.split(' ')[0]
+  $('s-veto-latest').textContent = findings[0] ? ` Latest: ${title(findings[0].reason)}.` : ''
+  const found = findings.slice(0, 3)
+  const l2link = (a) => s.l2Explorer ? `<a class="mono" href="${s.l2Explorer}/address/${a}">${esc(tiny(a))}</a>` : `<span class="mono">${esc(tiny(a))}</span>`
+  const forced = (s.forced ?? []).slice(0, 3)
+  $('forced').innerHTML = forced.length === 0 ? '<li class="muted">None yet.</li>' : forced.map((f) => {
+    const reason = f.reason ?? ''
+    const i = reason.indexOf(' ')
+    const what = f.token ? `${amount({ token: f.token })} from ${l2link(f.from)}` : `A call from ${l2link(f.from)}`
+    const to = f.recipient ? (f.recipient.toLowerCase() === s.contracts.safe.toLowerCase() ? ' to the Safe' : ` to ${l2link(f.recipient)}`) : ''
+    return `<li>${i > 0 ? `<span class="chip v">${esc(reason.slice(0, i))}</span>${esc(reason.slice(i + 1))}` : esc(reason)}` +
+      `<span class="meta">${what}${to} · ${ago(f.at)} · ${link('tx', f.tx, 'Safe transaction')}</span></li>`
+  }).join('')
+  $('findings').innerHTML = found.length === 0 ? '<li class="muted">No findings yet.</li>' : found.map((p) => {
+    const i = p.reason.indexOf(' ')
+    return `<li><span class="chip v">${esc(p.reason.slice(0, i))}</span>${esc(p.reason.slice(i + 1))}` +
+      `<span class="meta">${p.doneAt ? ago(p.doneAt) : ''} · withdrawal ${esc(tiny(p.hash))} · ${link('tx', p.doneTx, 'Safe transaction')}</span></li>`
+  }).join('')
+  $('c-delay').textContent = span(s.delay)
+  for (const id of ['cta-safe', 'nav-safe', 'assure-safe', 'zp-cta', 'mig-cta']) if (s.safeApp) $(id).href = s.safeApp
+  if (s.l2Explorer) for (const id of ['cta-explorer']) $(id).href = s.l2Explorer
+  if (!$('cso').innerHTML) $('cso').innerHTML = blockie(s.contracts.safe)
+
+  $('sum-forced').textContent = s.totals.forced > 0 ? ` Used ${n(s.totals.forced, 'time')} so far.` : ''
+
+  const marks = ['wm1', 'wm2', 'wm3']
+  $('cohort').innerHTML = s.owners.map((o, i) =>
+    s.explorer ? `<a class="${marks[i % 3]}" href="${s.explorer}/address/${o}">${esc(tiny(o))}</a>` : `<span class="${marks[i % 3]}">${esc(tiny(o))}</span>`).join('')
+
+  $('rpc').textContent = `${location.origin}/rpc`
+  $('chain').textContent = s.l2ChainId
+  $('l2explorer').innerHTML = s.l2Explorer ? `<a href="${s.l2Explorer}">${esc(s.l2Explorer)}</a>` : '<span class="muted">none</span>'
+  const head = (label, b, note) => `<tr><td class="muted">${label}</td><td class="mono">${b.number}</td><td class="muted">${ago(b.timestamp)}${note ? `. ${note}` : ''}</td></tr>`
+  $('sync').innerHTML =
+    head('L2 head', s.sync.unsafe, 'From the sequencer') +
+    head('L2 safe', s.sync.safe, 'Derived from Ethereum and the batch data by our verifier node') +
+    head('L2 finalized', s.sync.finalized) +
+    `<tr><td class="muted">L1 derived up to</td><td>${link('block', s.sync.l1Derived.number, String(s.sync.l1Derived.number))}</td><td class="muted">${ago(s.sync.l1Derived.timestamp)}</td></tr>`
+  const row = (label, addr, note) => `<tr><td class="muted">${label}</td><td>${link('address', addr, addr)}</td><td class="muted">${note ?? ''}</td></tr>`
+  $('contracts').innerHTML =
+    row('Safe', s.contracts.safe, `${s.threshold} of ${s.owners.length} owners, holds ${eth(s.balances.safe)} ETH${s.safeApp ? `. <a href="${s.safeApp}">Safe app</a>` : ''}`) +
+    row('Gateway', s.contracts.gateway, 'Deposits and L2 to L1 messages. Holds nothing') +
+    row('Withdrawal module', s.contracts.module, `Payout delay ${span(s.delay)}`) +
+    row('Batch inbox', s.contracts.batchInbox, 'Receives batch commitments') +
+    row('Batcher', s.hotKeys.batcher, `Hot key, ${eth(s.balances.batcher)} ETH for gas`) +
+    row('Relayer', s.hotKeys.relayer, `Hot key, ${eth(s.balances.relayer)} ETH for gas`)
+  const now = Math.floor(Date.now() / 1000)
+  const status = (p) =>
+    p.status === 'vetoed' ? `<span class="vetoed">vetoed</span> ${link('tx', p.doneTx)}${p.reason ? `<div class="muted small reason">${esc(p.reason)}</div>` : ''}`
+    : p.status === 'executed' ? `<span class="executed">paid</span> ${link('tx', p.doneTx)}`
+    : p.executableAt > now ? `queued, executable in ${p.executableAt - now}s` : 'executable'
+  $('payouts').innerHTML = s.payouts.length === 0 ? '<tr><td class="muted">None yet</td></tr>' :
+    '<tr><th>Withdrawal</th><th>On L2</th><th>To</th><th>Amount</th><th>Queued</th><th>Status</th></tr>' +
+    s.payouts.map((p) => `<tr><td class="mono">${short(p.hash)}</td>` +
+      `<td>${p.onL2 !== undefined ? `block ${p.onL2}` : '<span class="vetoed">not found</span>'}</td>` +
+      `<td>${link('address', p.to)}</td><td class="mono">${amount(p)}</td>` +
+      `<td>${link('tx', p.queuedTx)} <span class="muted">${ago(p.queuedAt)}</span></td><td>${status(p)}</td></tr>`).join('')
+  $('deposits').innerHTML = s.deposits.length === 0 ? '<tr><td class="muted">None yet</td></tr>' :
+    '<tr><th>L1 tx</th><th>From</th><th>Kind</th><th>ETH</th></tr>' +
+    s.deposits.map((d) => `<tr><td>${link('tx', d.tx)}</td><td>${link('address', d.from)}</td><td>${d.kind === 'ETH' ? 'ETH' : d.kind === 'forced' ? 'Forced transfer' : 'Message or token'}</td><td class="mono">${d.mint}</td></tr>`).join('')
+  $('updated').textContent = `Updated ${ago(s.updatedAt)}. ${n(s.totals.deposits, 'deposit')} and ${n(s.totals.payouts, 'payout')} since launch, ${ago(s.since)}.`
+
+  $('footer-links').innerHTML = [
+    s.safeApp && `<a href="${s.safeApp}">The Safe</a>`,
+    s.explorer && `<a href="${s.explorer}/address/${s.contracts.gateway}">Gateway on Etherscan</a>`,
+    s.explorer && `<a href="${s.explorer}/address/${s.contracts.module}">Module on Etherscan</a>`,
+    `<a href="https://safe.global/trademark">Safe trademark policy</a>`,
+  ].filter(Boolean).join('')
+}
+
+async function load() {
+  try {
+    const res = await fetch('/api/status')
+    if (res.ok) s = await res.json()
+    if (s && s.sync) render()
+  } catch {
+    $('updated').textContent = 'Could not load the status.'
+  }
+}
+load()
+setInterval(load, 10_000)
+</script>
+</body>
+</html>

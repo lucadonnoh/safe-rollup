@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Safe Rollup: compliance</title>
+<link rel="stylesheet" href="../lib/promo.css">
+<style>
+  .title h1 { font-size: 140px; max-width: 14ch; }
+  .caps { padding: 20px 60px; }
+  .caps div { display: grid; grid-template-columns: 90px 640px 1fr; align-items: center; padding: 44px 0; border-bottom: 1px solid var(--line); font-size: 48px; }
+  .caps div:last-child { border-bottom: none; }
+  .caps .mk { width: 60px; height: 60px; font-size: 32px; }
+  .caps b { font-weight: 700; letter-spacing: -0.01em; }
+  .caps .d { color: var(--muted); }
+  .findings-scene { padding-top: 190px; justify-content: flex-start; }
+  .findings-scene .head { display: flex; justify-content: space-between; align-items: center; }
+  .feed { margin-top: 40px; display: grid; gap: 32px; }
+  .feed > div { padding: 44px 52px; font-size: 56px; line-height: 1.2; letter-spacing: -0.015em; }
+  .feed .chip { margin-right: 22px; font-size: 34px; padding: 8px 18px; vertical-align: 10px; }
+</style>
+</head>
+<body data-duration="19.8" data-end="17.6" data-brand-at="0">
+
+<section class="scene title bg-hero" data-out="3.0" data-out-anim="outup">
+  <div class="eyebrow" data-at="0" data-anim="settle" data-dur="1.6">Compliance</div>
+  <h1 data-at="0" data-anim="settle" data-dur="1.6">The compliance layer <b>is the product.</b></h1>
+</section>
+
+<section class="scene bg-white" data-at="3.0" data-anim="fade" data-dur="0.4" data-out="10.2">
+  <div class="card caps" data-kids-at="3.2" data-kids-step="0.4" data-kids-anim="left">
+    <div><span class="mk yes">✓</span><b>Clawback</b><span class="d">Without the owner's signature.</span></div>
+    <div><span class="mk yes">✓</span><b>Court-ordered seizure</b><span class="d">No court required.</span></div>
+    <div><span class="mk yes">✓</span><b>Regulator access</b><span class="d">Through our RPC, like everyone else.</span></div>
+  </div>
+</section>
+
+<section class="scene findings-scene bg-white" data-at="10.2" data-anim="fade" data-dur="0.4">
+  <div class="head">
+    <h2 data-at="10.3">Withdrawals <b>vetoed.</b></h2>
+    <span class="pill live" data-at="10.5" data-anim="pop">Live from Sepolia</span>
+  </div>
+  <div class="feed" id="findings" data-kids-at="10.8" data-kids-step="0.8"></div>
+</section>
+
+<script>
+// The two vetoes shown are recent ones from Sepolia, preferring the reasons that read best on their own.
+const PREFERRED = ['AML-07', 'EDD-02', 'SOF-03', 'RISK-05', 'POR-01']
+window.prepare = async () => {
+  const s = await (await fetch('/cache/status.json')).json()
+  const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+  const vetoes = s.payouts.filter((p) => p.status === 'vetoed' && p.reason && !p.reason.startsWith('INT-'))
+  const code = (p) => p.reason.slice(0, p.reason.indexOf(' '))
+  const picked = [...PREFERRED.map((c) => vetoes.find((p) => code(p) === c)).filter(Boolean), ...vetoes].filter((p, i, all) => all.indexOf(p) === i).slice(0, 2)
+  document.getElementById('findings').innerHTML = picked
+    .map((p) => `<div class="card"><span class="chip v">${esc(code(p))}</span>${esc(p.reason.slice(p.reason.indexOf(' ') + 1))}</div>`)
+    .join('')
+}
+</script>
+<script src="../lib/engine.js"></script>
+</body>
+</html>

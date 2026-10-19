@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Safe Rollup: announcement</title>
+<link rel="stylesheet" href="../lib/promo.css">
+<style>
+  .intro { align-items: center; text-align: center; }
+  .intro .logo { font-size: 170px; justify-content: center; }
+  .intro .logo svg { width: 1.1em; height: 1.1em; }
+  .hero h1 { font-size: 150px; }
+  .hero .tag { margin-top: 64px; font-size: 56px; font-weight: 600; color: var(--brand); letter-spacing: -0.015em; }
+  .hero .iso { position: absolute; right: 110px; bottom: 50px; width: 560px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; }
+  .sum { padding: 44px 44px 50px; min-height: 300px; }
+  .sum .k { font: 600 24px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.12em; color: var(--brand); }
+  .sum .v { display: block; margin-top: 26px; font-size: 58px; font-weight: 700; letter-spacing: -0.025em; line-height: 1.08; }
+</style>
+</head>
+<body data-duration="18.8" data-end="16.6" data-brand-at="2.5">
+
+<section class="scene intro bg-hero" data-out="2.4">
+  <div class="eyebrow" data-at="0" data-anim="settle" data-dur="1.6">Introducing</div>
+  <div class="logo" data-at="0" data-anim="settle" data-dur="1.6">
+    <svg viewBox="0 0 26 26" aria-hidden="true">
+      <rect x="1" y="1" width="24" height="24" rx="7" fill="#16209a"/>
+      <circle cx="8" cy="13" r="2.4" fill="#fff"/>
+      <circle cx="13" cy="13" r="2.4" fill="#fff"/>
+      <circle cx="18" cy="13" r="2.4" fill="#fff" opacity="0.35"/>
+    </svg>
+    <span class="wm">Safe <i>Rollup</i></span>
+  </div>
+</section>
+
+<section class="scene hero bg-hero" data-at="2.4" data-anim="fade" data-dur="0.4" data-out="7.4" data-out-anim="outup">
+  <h1 data-at="2.6">Ethereum-anchored.</h1>
+  <h1 data-at="3.0"><b>Operator-controlled.</b></h1>
+  <p class="tag" data-at="3.7">Safe as in Safe multisig, not safe funds.</p>
+  <svg class="iso" viewBox="0 0 400 300" font-family="Inter, system-ui, sans-serif">
+    <g data-at="3.3"><path d="M 20 300 L 200 214 L 380 300 Z" fill="#dbe7ff" stroke="#16209a" stroke-width="1.4"/>
+      <text x="200" y="272" text-anchor="middle" font-size="14" fill="#16209a">◆ Ethereum</text></g>
+    <g stroke="#16209a" stroke-width="1.4">
+      <g data-at="3.9" data-anim="down"><polygon points="90,96 200,46 310,96 200,146" fill="#fff8ea" opacity="0.35" transform="translate(0,-16)"/></g>
+      <g data-at="3.75" data-anim="down"><polygon points="90,96 200,46 310,96 200,146" fill="#fff8ea" opacity="0.6" transform="translate(0,-8)"/></g>
+      <g data-at="3.6" data-anim="down"><polygon points="90,96 200,46 310,96 200,146" fill="#fff8ea"/></g>
+    </g>
+    <text x="200" y="100" text-anchor="middle" font-size="13" fill="#16209a" data-at="4.0" data-anim="fade">Your infrastructure</text>
+    <g data-at="4.3" data-anim="fade"><path d="M 252 128 C 300 170, 290 205, 238 232" fill="none" stroke="#16209a" stroke-width="1.4" stroke-dasharray="5 5"/>
+      <polygon points="238,232 247,224 249,235" fill="#16209a"/></g>
+    <g data-at="4.5" data-anim="pop"><rect x="229" y="164" width="142" height="26" rx="13" fill="#fff" stroke="#16209a" stroke-width="1.2"/>
+      <text x="300" y="181" text-anchor="middle" font-size="11.5" fill="#16209a">Zero Proof™ · 0 bytes</text></g>
+  </svg>
+</section>
+
+<section class="scene bg-white" data-at="7.4" data-anim="fade" data-dur="0.4">
+  <div class="grid" data-kids-at="7.6" data-kids-step="0.3">
+    <div class="card sum"><span class="k">Architecture</span><span class="v">48× less code</span></div>
+    <div class="card sum"><span class="k">Zero Proofs™</span><span class="v">Fastest and most secure ever</span></div>
+    <div class="card sum"><span class="k">Platform</span><span class="v">Unhackable bridge</span></div>
+    <div class="card sum"><span class="k">Risk-free yield</span><span class="v">Up to &gt;1,000% APY</span></div>
+    <div class="card sum"><span class="k">Compliance</span><span class="v">100% account coverage</span></div>
+    <div class="card sum"><span class="k">Assurance</span><span class="v">Independent assurance</span></div>
+  </div>
+</section>
+
+<script src="../lib/engine.js"></script>
+</body>
+</html>

@@ -94,7 +94,7 @@ contract SafeRollup_Test is Test {
     }
 
     function test_depositTransaction_gasLimitTooLow_reverts() public {
-        vm.expectRevert(SafeRollupGateway.GasLimitTooLow.selector);
+        vm.expectRevert(SafeRollupGateway.BadDeposit.selector);
         vm.prank(alice, alice);
         gateway.depositTransaction(alice, 0, 20_000, false, "");
     }
@@ -116,7 +116,7 @@ contract SafeRollup_Test is Test {
             AddressAliasHelper.applyL1ToL2Alias(address(gateway)),
             0x4200000000000000000000000000000000000007,
             0,
-            abi.encodePacked(uint256(0), uint256(0), gateway.baseGas(message, 50_000), false, relay)
+            abi.encodePacked(uint256(0), uint256(0), uint64(316_400 + uint256(50_000) * 64 / 63 + 2 * 40), false, relay)
         );
         vm.prank(alice);
         gateway.sendMessage(address(0xbeef), message, 50_000);
@@ -133,33 +133,30 @@ contract SafeRollup_Test is Test {
         assertEq(token.balanceOf(address(gateway)), 0);
     }
 
-    function test_depositERC20To_burnsL1CopyOfL2NativeToken() public {
+    function test_depositERC20To_movesL1CopyOfL2NativeTokenToSafe() public {
         address l2Token = makeAddr("l2Token");
-        OptimismMintableERC20 l1Copy = new OptimismMintableERC20(address(gateway), l2Token, "L2 Token", "L2T", 18);
+        OptimismMintableERC20 l1Copy = new OptimismMintableERC20(address(safe), l2Token, "L2 Token", "L2T", 18);
         vm.prank(address(safe));
-        gateway.mintERC20(address(l1Copy), alice, 5 ether);
+        l1Copy.mint(alice, 5 ether);
 
-        vm.prank(alice);
+        vm.startPrank(alice);
+        l1Copy.approve(address(gateway), 3 ether);
         gateway.depositERC20To(address(l1Copy), l2Token, alice, 3 ether, 200_000, "");
+        vm.stopPrank();
         assertEq(l1Copy.balanceOf(alice), 2 ether);
-        assertEq(l1Copy.totalSupply(), 2 ether);
-        assertEq(l1Copy.balanceOf(address(safe)), 0);
+        assertEq(l1Copy.balanceOf(address(safe)), 3 ether);
     }
 
-    function test_depositERC20To_wrongPair_reverts() public {
-        OptimismMintableERC20 l1Copy =
-            new OptimismMintableERC20(address(gateway), makeAddr("l2Token"), "L2 Token", "L2T", 18);
-        vm.prank(address(safe));
-        gateway.mintERC20(address(l1Copy), alice, 1 ether);
-
-        vm.expectRevert(SafeRollupGateway.WrongTokenPair.selector);
-        vm.prank(alice);
-        gateway.depositERC20To(address(l1Copy), makeAddr("otherToken"), alice, 1 ether, 200_000, "");
-    }
-
-    function test_mintERC20_onlySafe_reverts() public {
+    function test_depositTransactionOverride_anySenderForSafeOnly() public {
         vm.expectRevert(SafeRollupGateway.Unauthorized.selector);
-        gateway.mintERC20(address(1), alice, 1);
+        vm.prank(alice, alice);
+        gateway.depositTransactionOverride(alice, relayer, 1 ether, 100_000, false, "");
+
+        vm.expectEmit(address(gateway));
+        emit TransactionDeposited(alice, relayer, 0, abi.encodePacked(uint256(0), uint256(1 ether), uint64(100_000), false, ""));
+        execAsOwner(
+            address(gateway), abi.encodeCall(gateway.depositTransactionOverride, (alice, relayer, 1 ether, 100_000, false, ""))
+        );
     }
 
     function test_relayMessage_onlySafe_reverts() public {
@@ -185,6 +182,38 @@ contract SafeRollup_Test is Test {
         gateway.setConfig(0, abi.encode(alice));
     }
 
+    function deposit(uint64 _gasLimit) internal {
+        vm.prank(alice, alice);
+        gateway.depositTransaction(alice, 0, _gasLimit, false, "");
+    }
+
+    function test_metering_baseFeeFollowsDemand() public {
+        deposit(9_000_000);
+        deposit(9_000_000);
+        vm.roll(block.number + 1);
+        deposit(100_000);
+        // 18M bought against a 2M target: the base fee doubles.
+        assertEq(gateway.prevBaseFee(), 2 gwei);
+
+        vm.roll(block.number + 3);
+        deposit(100_000);
+        // One step down for the last block, then 1/8 less for each of the two empty blocks.
+        assertEq(gateway.prevBaseFee(), 1_349_414_063);
+
+        vm.roll(block.number + 100);
+        deposit(100_000);
+        assertEq(gateway.prevBaseFee(), 1 gwei);
+    }
+
+    function test_metering_capsGasPerL1Block() public {
+        deposit(10_000_000);
+        deposit(10_000_000);
+        vm.expectRevert(SafeRollupGateway.OutOfGas.selector);
+        deposit(21_000);
+        vm.roll(block.number + 1);
+        deposit(21_000);
+    }
+
     // Module.
 
     function test_payout_afterDelay_succeeds() public {
@@ -192,28 +221,28 @@ contract SafeRollup_Test is Test {
         vm.prank(relayer);
         module.queue(hash, alice, 1 ether, "");
 
-        vm.expectRevert(WithdrawalDelayModule.TooEarly.selector);
+        vm.expectRevert(WithdrawalDelayModule.NotExecutable.selector);
         module.execute(hash, alice, 1 ether, "");
 
         vm.warp(block.timestamp + DELAY);
-        vm.expectRevert(WithdrawalDelayModule.WrongCall.selector);
+        vm.expectRevert(WithdrawalDelayModule.NotExecutable.selector);
         module.execute(hash, alice, 2 ether, "");
 
         module.execute(hash, alice, 1 ether, "");
         assertEq(alice.balance, 11 ether);
-        vm.expectRevert(WithdrawalDelayModule.AlreadyExecuted.selector);
+        vm.expectRevert(WithdrawalDelayModule.NotExecutable.selector);
         module.execute(hash, alice, 1 ether, "");
     }
 
     function test_payout_mintsL2NativeToken() public {
         OptimismMintableERC20 l1Copy =
-            new OptimismMintableERC20(address(gateway), makeAddr("l2Token"), "L2 Token", "L2T", 18);
-        bytes memory mint = abi.encodeCall(gateway.mintERC20, (address(l1Copy), alice, 4 ether));
+            new OptimismMintableERC20(address(safe), makeAddr("l2Token"), "L2 Token", "L2T", 18);
+        bytes memory mint = abi.encodeCall(l1Copy.mint, (alice, 4 ether));
         bytes32 hash = keccak256("l2 native withdrawal");
         vm.prank(relayer);
-        module.queue(hash, address(gateway), 0, mint);
+        module.queue(hash, address(l1Copy), 0, mint);
         vm.warp(block.timestamp + DELAY);
-        module.execute(hash, address(gateway), 0, mint);
+        module.execute(hash, address(l1Copy), 0, mint);
         assertEq(l1Copy.balanceOf(alice), 4 ether);
     }
 
@@ -244,7 +273,7 @@ contract SafeRollup_Test is Test {
         vm.prank(relayer);
         module.queue(hash, address(gateway), 0, relay);
         vm.warp(block.timestamp + DELAY);
-        vm.expectRevert(WithdrawalDelayModule.CallFailed.selector);
+        vm.expectRevert(WithdrawalDelayModule.NotExecutable.selector);
         module.execute(hash, address(gateway), 0, relay);
         (,, bool executed) = module.items(hash);
         assertFalse(executed);
@@ -256,7 +285,7 @@ contract SafeRollup_Test is Test {
         module.queue(hash, alice, 5 ether, "");
         execAsOwner(address(module), abi.encodeCall(module.veto, (hash)));
         vm.warp(block.timestamp + DELAY);
-        vm.expectRevert(WithdrawalDelayModule.NotQueued.selector);
+        vm.expectRevert(WithdrawalDelayModule.NotExecutable.selector);
         module.execute(hash, alice, 5 ether, "");
         assertEq(address(safe).balance, 10 ether);
     }
@@ -271,20 +300,24 @@ contract SafeRollup_Test is Test {
         vm.expectRevert(WithdrawalDelayModule.UnsafeTarget.selector);
         module.queue(bytes32(0), address(module), 0, "");
         module.queue(bytes32(0), alice, 0, "");
-        vm.expectRevert(WithdrawalDelayModule.AlreadyQueued.selector);
+        vm.expectRevert(WithdrawalDelayModule.Unauthorized.selector);
         module.queue(bytes32(0), alice, 0, "");
         vm.stopPrank();
     }
 
-    function test_adminFunctions_onlySafe() public {
+    function test_veto_onlySafe() public {
         vm.expectRevert(WithdrawalDelayModule.Unauthorized.selector);
         module.veto(bytes32(0));
-        vm.expectRevert(WithdrawalDelayModule.Unauthorized.selector);
-        module.setRelayer(alice);
-        vm.expectRevert(WithdrawalDelayModule.Unauthorized.selector);
-        module.setDelay(0);
+    }
 
-        execAsOwner(address(module), abi.encodeCall(module.setRelayer, (alice)));
-        assertEq(module.relayer(), alice);
+    function test_veto_afterExecution_reverts() public {
+        bytes32 hash = keccak256("withdrawal");
+        vm.prank(relayer);
+        module.queue(hash, alice, 1 ether, "");
+        vm.warp(block.timestamp + DELAY);
+        module.execute(hash, alice, 1 ether, "");
+        vm.prank(address(safe));
+        vm.expectRevert(WithdrawalDelayModule.Unauthorized.selector);
+        module.veto(hash);
     }
 }

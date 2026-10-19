@@ -1,0 +1,82 @@
+@import url(wordmark.css);
+
+:root {
+  --ink: #0a0b10; --muted: #5d6475; --line: #e4e7ee; --band: #f5f7fb;
+  --brand: #16209a; --brand-soft: #eef1ff; --sky1: #c9dbff; --sky2: #edf4ff;
+  --ok: #12804a; --ok-soft: #dcf3e5; --bad: #c2362b; --bad-soft: #fde7e5; --warn: #b88400; --warn-soft: #fff1c9;
+  --cream: #fff8ea; --gold: #e0a100;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; }
+body { position: relative; font: 32px/1.4 var(--sans); color: var(--ink); background: #fff; -webkit-font-smoothing: antialiased; }
+
+.scene { position: absolute; inset: 0; padding: 150px 160px 120px; display: flex; flex-direction: column; justify-content: center; }
+.bg-hero { background: linear-gradient(120deg, var(--sky1) 0%, var(--sky2) 55%, #fff 100%); }
+.bg-band { background: var(--band); }
+.bg-white { background: #fff; }
+
+.eyebrow { font: 500 26px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.18em; color: var(--muted); margin-bottom: 36px; }
+.eyebrow::before { content: "{ "; color: var(--gold); }
+.eyebrow::after { content: " }"; color: var(--gold); }
+h1, h2 { margin: 0; letter-spacing: -0.03em; line-height: 1.04; }
+h1 { font-size: 118px; font-weight: 300; }
+h2 { font-size: 84px; font-weight: 300; }
+h1 b, h2 b { font-weight: 700; }
+.lead { color: var(--muted); font-size: 40px; line-height: 1.35; max-width: 30ch; margin-top: 40px; }
+.muted { color: var(--muted); }
+.brand-c { color: var(--brand); }
+.ok-c { color: var(--ok); }
+.bad-c { color: var(--bad); }
+.foot { position: absolute; left: 160px; bottom: 64px; font-size: 22px; color: var(--muted); max-width: 1200px; }
+
+.wm { font-family: "Safe Rollup Wordmark", var(--sans); font-weight: 700; letter-spacing: -0.04em; white-space: nowrap; }
+.wm i { font-style: normal; color: var(--brand); }
+.logo { display: flex; align-items: center; gap: 0.45em; }
+.logo svg { width: 1.15em; height: 1.15em; }
+
+.card { background: #fff; border: 1px solid var(--line); border-radius: 28px; box-shadow: 0 30px 60px -30px rgba(22, 32, 154, 0.18); }
+.badges { display: flex; gap: 18px; flex-wrap: wrap; }
+.badge { border: 2px solid color-mix(in srgb, var(--brand) 30%, transparent); color: var(--brand); background: var(--brand-soft); border-radius: 999px; padding: 10px 28px; font-size: 28px; font-weight: 600; }
+.pill { display: inline-flex; align-items: center; gap: 12px; border-radius: 999px; padding: 10px 26px; font-size: 26px; font-weight: 600; }
+.pill.live { background: var(--ok-soft); color: var(--ok); }
+.pill.live::before { content: ""; width: 14px; height: 14px; border-radius: 50%; background: var(--ok); }
+.chip { display: inline-block; border-radius: 10px; padding: 4px 14px; font-size: 24px; font-weight: 700; font-family: var(--mono); }
+.chip.v { background: var(--bad-soft); color: var(--bad); }
+.mk { display: inline-flex; flex: none; width: 46px; height: 46px; border-radius: 50%; align-items: center; justify-content: center; font-size: 26px; font-weight: 900; }
+.mk.yes { background: var(--ok-soft); color: var(--ok); }
+.mk.no { background: var(--bad-soft); color: var(--bad); }
+.mk.part { background: var(--warn-soft); color: var(--warn); }
+.mono { font-family: var(--mono); }
+.num { font-variant-numeric: tabular-nums; }
+
+/* Brand bar and end card, added by engine.js. */
+.brandbar { position: absolute; left: 160px; top: 64px; font-size: 38px; z-index: 50; }
+.urlbar { position: absolute; right: 160px; top: 72px; font: 500 26px/1 var(--mono); color: var(--brand); z-index: 50; }
+.endcard { align-items: center; text-align: center; z-index: 60; }
+.endcard .logo { font-size: 150px; justify-content: center; }
+.endcard .site { margin-top: 44px; font-size: 64px; font-weight: 600; color: var(--brand); letter-spacing: -0.02em; }
+.endcard .sub { margin-top: 36px; }
+
+/* Timeline animations, scheduled by engine.js from data-at / data-out. */
+svg [data-at], svg [data-out] { transform-box: fill-box; transform-origin: center; }
+@keyframes up { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
+@keyframes down { from { opacity: 0; transform: translateY(-40px); } to { opacity: 1; transform: none; } }
+@keyframes left { from { opacity: 0; transform: translateX(-60px); } to { opacity: 1; transform: none; } }
+@keyframes right { from { opacity: 0; transform: translateX(60px); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop { from { opacity: 0; transform: scale(0.8); } to { opacity: 1; transform: none; } }
+@keyframes zoom { from { opacity: 0; transform: scale(1.08); } to { opacity: 1; transform: none; } }
+@keyframes wipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes stamp {
+  0% { opacity: 0; transform: scale(1.9) rotate(-9deg); }
+  55% { opacity: 1; transform: scale(0.94) rotate(-6deg); }
+  100% { opacity: 1; transform: scale(1) rotate(-6deg); }
+}
+/* Visible from the first frame, so the video preview shows the title; it only drifts into place. */
+@keyframes settle { from { transform: translateY(18px); } to { transform: none; } }
+@keyframes out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes outup { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-40px); } }
+@keyframes dim { from { opacity: 1; } to { opacity: 0.12; } }

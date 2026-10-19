@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Safe Rollup: bridgeless architecture</title>
+<link rel="stylesheet" href="../lib/promo.css">
+<style>
+  .hacks .big { font-size: 300px; font-weight: 700; letter-spacing: -0.05em; line-height: 0.9; color: var(--bad); }
+  .hacks .what { margin-top: 30px; font-size: 56px; color: var(--muted); letter-spacing: -0.01em; }
+  .incidents { margin-top: 70px; display: grid; gap: 22px; max-width: 1100px; }
+  .incidents div { display: grid; grid-template-columns: 1fr 200px 200px; align-items: center; font-size: 42px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+  .incidents .when { color: var(--muted); }
+  .incidents .loss { text-align: right; font-weight: 700; color: var(--bad); }
+  .flow { flex-direction: row; align-items: center; gap: 60px; }
+  .flow .text { width: 640px; flex: none; }
+  .flow h2 { font-size: 92px; }
+  .flow .lead { font-size: 46px; }
+  .flow svg { width: 900px; flex: none; overflow: visible; }
+  .record { padding-top: 190px; justify-content: flex-start; }
+  .kicker { font: 600 28px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted); }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 30px; margin-top: 36px; }
+  .tile { padding: 40px 40px 44px; }
+  .tile .v { font-size: 120px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; color: var(--brand); }
+  .tile .l { margin-top: 18px; font-size: 38px; color: var(--muted); }
+  .close { margin-top: 80px; font-size: 84px; }
+</style>
+</head>
+<body data-duration="19.2" data-end="17" data-brand-at="0">
+
+<section class="scene hacks bg-white" data-out="5.0" data-out-anim="outup">
+  <div class="big num" data-at="0" data-anim="settle" data-dur="1.6">$3.7B</div>
+  <div class="what" data-at="0" data-anim="settle" data-dur="1.6">hacked from cross-chain bridges to date</div>
+  <div class="incidents" data-kids-at="1.6" data-kids-step="0.3" data-kids-anim="left">
+    <div><span>Ronin bridge</span><span class="when">2022</span><span class="loss">$624M</span></div>
+    <div><span>Kelp rsETH bridge</span><span class="when">2026</span><span class="loss">$292M</span></div>
+  </div>
+  <p class="foot" data-at="2.0" data-anim="fade">Sources: DefiLlama Hacks (as of October 2026), Halborn, CoinDesk.</p>
+</section>
+
+<section class="scene flow bg-hero" data-at="5.0" data-anim="fade" data-dur="0.4" data-out="10.4">
+  <div class="text">
+    <h2 data-at="5.1"><span class="wm">Safe <i>Rollup</i></span> has <b>no bridge contract.</b></h2>
+    <p class="lead" data-at="5.6">Deposits go directly into a Safe.</p>
+  </div>
+  <svg viewBox="10 40 380 220" font-family="Inter, system-ui, sans-serif">
+    <g font-size="11.5" fill="#16209a">
+      <g stroke="#16209a" stroke-width="1.3" fill="none" data-at="6.1" data-anim="fade">
+        <path id="p1" d="M 94 70 C 140 70, 140 140, 170 146"/><path id="p2" d="M 94 150 L 168 150"/><path id="p3" d="M 94 230 C 140 230, 140 160, 170 154"/>
+      </g>
+      <g data-at="6.1" data-anim="fade">
+        <polygon points="170,146 162,141 163,151" fill="#16209a"/><polygon points="168,150 160,145 160,155" fill="#16209a"/><polygon points="170,154 163,149 162,159" fill="#16209a"/>
+      </g>
+      <g data-at="8.2" data-anim="fade">
+        <path id="p4" d="M 262 150 L 360 150" stroke="#16209a" stroke-width="1.3" fill="none" stroke-dasharray="5 5"/>
+        <polygon points="360,150 352,145 352,155" fill="#16209a"/>
+        <text x="320" y="176" text-anchor="middle">Payout</text>
+      </g>
+      <g data-at="5.7" data-anim="pop"><rect x="20" y="58" width="74" height="24" rx="12" fill="#fff" stroke="#16209a"/><text x="57" y="74" text-anchor="middle">Deposit</text></g>
+      <g data-at="5.8" data-anim="pop"><rect x="20" y="138" width="74" height="24" rx="12" fill="#fff" stroke="#16209a"/><text x="57" y="154" text-anchor="middle">Deposit</text></g>
+      <g data-at="5.9" data-anim="pop"><rect x="20" y="218" width="74" height="24" rx="12" fill="#fff" stroke="#16209a"/><text x="57" y="234" text-anchor="middle">Deposit</text></g>
+      <g id="dots"></g>
+      <g data-at="6.3" data-anim="pop">
+        <g stroke="#16209a" stroke-width="1.4">
+          <polygon points="170,150 216,104 262,150 216,196" fill="#fff8ea" opacity="0.45" transform="translate(0,-10)"/>
+          <polygon points="170,150 216,104 262,150 216,196" fill="#fff8ea"/>
+        </g>
+        <text x="216" y="155" text-anchor="middle" font-size="14" font-weight="600">Safe</text>
+      </g>
+      <g data-at="8.5" data-anim="pop"><rect x="276" y="118" width="70" height="24" rx="12" fill="#fde7e5" stroke="#c2362b"/><text x="311" y="134" text-anchor="middle" fill="#c2362b">Veto</text></g>
+    </g>
+  </svg>
+</section>
+
+<section class="scene record bg-white" data-at="10.4" data-anim="fade" data-dur="0.4">
+  <div class="kicker" data-at="10.5" data-anim="fade">The Safe contracts</div>
+  <div class="tiles" data-kids-at="10.7" data-kids-step="0.25">
+    <div class="card tile"><div class="v">$27B</div><div class="l">secured</div></div>
+    <div class="card tile"><div class="v">6</div><div class="l">audits</div></div>
+    <div class="card tile"><div class="v">✓</div><div class="l">formally verified</div></div>
+    <div class="card tile"><div class="v">0</div><div class="l">exploits</div></div>
+  </div>
+  <h2 class="close" data-at="12.3">Unhackable bridge. <b>There is no bridge contract.</b></h2>
+  <p class="foot" data-at="12.5" data-anim="fade">Sources: Safe Ecosystem Foundation, Q2 2026 Quarterly Report; Safe Smart Account audits.</p>
+</section>
+
+<script>
+// Deposits travel along the arrows into the Safe, then one payout leaves it.
+window.prepare = async () => {
+  const runs = [['p1', 6.5], ['p2', 6.65], ['p3', 6.8], ['p1', 7.3], ['p2', 7.45], ['p3', 7.6]].map(([path, at]) => ({ path, at }))
+  promo.travel(document.getElementById('dots'), [...runs, { path: 'p4', at: 8.9, color: '#12804a' }])
+}
+</script>
+<script src="../lib/engine.js"></script>
+</body>
+</html>

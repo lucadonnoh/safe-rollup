@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Safe Rollup: Zero Proofs</title>
+<link rel="stylesheet" href="../lib/promo.css">
+<style>
+  .title h1 { font-size: 150px; }
+  .race { padding-top: 180px; justify-content: flex-start; }
+  .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; margin-top: 56px; }
+  .lane { padding: 48px 52px; height: 620px; display: flex; flex-direction: column; }
+  .lane.ours { border: 3px solid var(--brand); background: linear-gradient(180deg, var(--brand-soft), #fff 60%); }
+  .lane .who { display: flex; justify-content: space-between; align-items: center; font: 600 28px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  .lane.ours .who { color: var(--brand); }
+  .tag { background: var(--brand); color: #fff; border-radius: 999px; padding: 10px 20px; font: 800 20px/1 var(--sans); letter-spacing: 0.08em; }
+  .track { margin-top: 56px; height: 26px; border-radius: 13px; background: #e9ecf3; overflow: hidden; }
+  .track i { display: block; height: 100%; width: 0; background: #aab3c5; border-radius: 13px; }
+  .lane .state { margin-top: 30px; font-size: 40px; color: var(--muted); }
+  .lane .clock { margin-top: 20px; font-size: 190px; font-weight: 700; letter-spacing: -0.05em; line-height: 1; color: #aab3c5; }
+  .done { margin-top: 56px; display: flex; align-items: center; gap: 22px; font-size: 64px; font-weight: 700; letter-spacing: -0.02em; color: var(--ok); }
+  .done .mk { width: 72px; height: 72px; font-size: 38px; }
+  .chips { margin-top: 48px; display: flex; flex-wrap: wrap; gap: 14px; }
+  .chips span { border-radius: 999px; background: var(--ok-soft); color: var(--ok); padding: 10px 22px; font: 600 28px/1 var(--mono); }
+  .bench { padding-top: 200px; justify-content: flex-start; }
+  table { width: 100%; border-collapse: collapse; font-size: 44px; }
+  th, td { text-align: left; padding: 34px 36px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font: 600 26px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); padding-bottom: 30px; }
+  td:first-child { width: 28%; font-weight: 600; }
+  td.ours, th.ours { background: var(--brand-soft); }
+  th.ours { color: var(--brand); border-radius: 26px 26px 0 0; }
+  td .mk { width: 54px; height: 54px; font-size: 28px; margin-right: 20px; vertical-align: middle; }
+  td.ours { font-weight: 700; }
+</style>
+</head>
+<body data-duration="19.6" data-end="17.4" data-brand-at="0">
+
+<section class="scene title bg-hero" data-out="4.2" data-out-anim="outup">
+  <div class="eyebrow" data-at="0" data-anim="settle" data-dur="1.6">Technology</div>
+  <h1 data-at="0" data-anim="settle" data-dur="1.6">Introducing <b>Zero Proofs™</b></h1>
+  <p class="lead" data-at="0" data-anim="settle" data-dur="1.6">The fastest proof system on Ethereum.</p>
+</section>
+
+<section class="scene race bg-white" data-at="4.2" data-anim="fade" data-dur="0.4" data-out="9.6">
+  <h2 data-at="4.3">Real-time <b>proving.</b></h2>
+  <div class="lanes">
+    <div class="card lane" data-at="4.5">
+      <div class="who">Leading zkVMs</div>
+      <div class="track"><i id="bar"></i></div>
+      <div class="state">Proving…</div>
+      <div class="clock num" id="clock">0.0s</div>
+    </div>
+    <div class="card lane ours" data-at="4.7">
+      <div class="who">Zero Proofs™ <span class="tag">RECOMMENDED</span></div>
+      <div class="done" data-at="5.1" data-anim="pop"><span class="mk yes">✓</span>Proven in 0s</div>
+      <div class="chips glance" id="blocks" data-kids-at="5.6" data-kids-step="0.4" data-kids-anim="pop" data-kids-dur="0.4"></div>
+    </div>
+  </div>
+</section>
+
+<section class="scene bench bg-white" data-at="9.6" data-anim="fade" data-dur="0.4">
+  <table>
+    <thead><tr data-at="9.7" data-anim="fade"><th></th><th>Leading zkVMs</th><th class="ours">Zero Proofs™</th></tr></thead>
+    <tbody data-kids-at="10.1" data-kids-step="0.5" data-kids-anim="left">
+      <tr><td>Quantum resistance</td><td><span class="mk part">!</span>Depends on the system</td><td class="ours"><span class="mk yes">✓</span>Complete: no cryptography to break</td></tr>
+      <tr><td>Security level</td><td><span class="mk no">✕</span>100 to 128 bits</td><td class="ours"><span class="mk yes">✓</span>2 of 3</td></tr>
+    </tbody>
+  </table>
+  <p class="foot" data-at="10.8" data-anim="fade">Benchmarks measured on operator infrastructure.</p>
+</section>
+
+<script>
+window.prepare = async () => {
+  const status = await (await fetch('/cache/status.json')).json()
+  const head = status.sync.unsafe.number
+  const blocks = document.getElementById('blocks')
+  for (let i = 1; i <= 8; i++) blocks.insertAdjacentHTML('beforeend', `<span>${(head + i).toLocaleString('en-US')} ✓</span>`)
+  const bar = document.getElementById('bar')
+  const clock = document.getElementById('clock')
+  promo.ticks.push((t) => {
+    const s = Math.max(0, Math.min(t, 9.6) - 4.6)
+    bar.style.width = `${(s / 17) * 100}%`
+    clock.textContent = `${s.toFixed(1)}s`
+  })
+}
+</script>
+<script src="../lib/engine.js"></script>
+</body>
+</html>

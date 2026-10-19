@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Safe Rollup: assurance</title>
+<link rel="stylesheet" href="../lib/promo.css">
+<style>
+  .title h1 { font-size: 132px; max-width: 14ch; }
+  .report { flex-direction: row; align-items: center; gap: 110px; padding-top: 170px; }
+  .seal { flex: none; width: 420px; height: 480px; border: 5px solid #aab3c5; border-radius: 34px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #2a3145; background: #fafbfd; }
+  .seal .t1 { font: 34px Georgia, serif; letter-spacing: 0.08em; }
+  .seal .t2 { font: 700 104px/1.1 Georgia, serif; }
+  .seal .t3 { font: 34px Georgia, serif; }
+  .seal .t4 { margin-top: 34px; background: #aab3c5; color: #fff; font-weight: 700; font-size: 34px; padding: 10px 26px; border-radius: 10px; }
+  .doc { flex: 1; }
+  .doc .k { font: 600 22px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  .doc h2 { font-size: 64px; }
+  .fields { display: grid; grid-template-columns: 1fr; gap: 44px; margin: 56px 0 0; }
+  .fields .v { margin-top: 12px; font-size: 54px; font-weight: 600; letter-spacing: -0.015em; }
+  .doc p { margin: 52px 0 0; font-size: 34px; color: var(--muted); max-width: 42ch; }
+  .doc p b { color: var(--ink); }
+  .quote { flex-direction: row; align-items: center; gap: 100px; }
+  .quote blockquote { margin: 0; font-size: 92px; font-weight: 500; letter-spacing: -0.03em; line-height: 1.12; }
+  .quote .who { margin-top: 48px; font-size: 36px; }
+  .quote .who b { display: block; }
+  .avatar { flex: none; width: 380px; height: 380px; border-radius: 34px; overflow: hidden; }
+  .avatar svg { width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body data-duration="17.8" data-end="15.6" data-brand-at="0">
+
+<section class="scene title bg-hero" data-out="3.4" data-out-anim="outup">
+  <div class="eyebrow" data-at="0" data-anim="settle" data-dur="1.6">Assurance</div>
+  <h1 data-at="0" data-anim="settle" data-dur="1.6">Independent security assurance: <b>2 of 3 Type I</b></h1>
+</section>
+
+<section class="scene report bg-white" data-at="3.4" data-anim="fade" data-dur="0.4" data-out="9.6">
+  <div class="seal glance" data-at="3.6" data-anim="pop">
+    <div class="t1">SAFE</div><div class="t2">2 of 3</div><div class="t3">Type I</div>
+    <div class="t4" data-at="4.2" data-anim="stamp" data-dur="0.5">Self-assessed</div>
+  </div>
+  <div class="doc">
+    <h2 data-at="3.8"><span class="wm">Safe <i>Rollup</i></span></h2>
+    <div class="fields" data-kids-at="4.4" data-kids-step="0.4">
+      <div><div class="k">Standard</div><div class="v">Safe threshold (2 of 3)</div></div>
+      <div><div class="k">Assessor</div><div class="v">The operator</div></div>
+      <div><div class="k">Opinion</div><div class="v ok-c">No exceptions noted</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="scene quote bg-hero" data-at="9.6" data-anim="fade" data-dur="0.4">
+  <div class="avatar" id="avatar" data-at="9.8" data-anim="pop"></div>
+  <div>
+    <blockquote data-at="9.9">“We have honored every withdrawal we chose to honor.”</blockquote>
+    <div class="who" data-at="10.9"><b>The Multisig</b><span class="muted">Chief Settlement Officer, <span class="wm">Safe <i>Rollup</i></span></span></div>
+  </div>
+</section>
+
+<script>
+// The same blockie the site uses as the Chief Settlement Officer's headshot.
+function blockie(address, size = 8) {
+  const seed = address.toLowerCase()
+  const r = [0, 0, 0, 0]
+  for (let i = 0; i < seed.length; i++) r[i % 4] = ((r[i % 4] << 5) - r[i % 4] + seed.charCodeAt(i)) | 0
+  const rand = () => {
+    const t = r[0] ^ (r[0] << 11)
+    r[0] = r[1]
+    r[1] = r[2]
+    r[2] = r[3]
+    r[3] = r[3] ^ (r[3] >> 19) ^ t ^ (t >> 8)
+    return (r[3] >>> 0) / ((1 << 31) >>> 0)
+  }
+  const color = () => `hsl(${Math.floor(rand() * 360)},${rand() * 60 + 40}%,${(rand() + rand() + rand() + rand()) * 25}%)`
+  const fg = color(), bg = color(), spot = color()
+  const half = Math.ceil(size / 2)
+  let rects = ''
+  for (let y = 0; y < size; y++) {
+    const row = []
+    for (let x = 0; x < half; x++) row.push(Math.floor(rand() * 2.3))
+    row.concat(row.slice(0, size - half).reverse()).forEach((v, x) => {
+      if (v) rects += `<rect x="${x}" y="${y}" width="1" height="1" fill="${v === 1 ? fg : spot}"/>`
+    })
+  }
+  return `<svg viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="${bg}"/>${rects}</svg>`
+}
+window.prepare = async () => {
+  const s = await (await fetch('/cache/status.json')).json()
+  document.getElementById('avatar').innerHTML = blockie(s.contracts.safe)
+}
+</script>
+<script src="../lib/engine.js"></script>
+</body>
+</html>

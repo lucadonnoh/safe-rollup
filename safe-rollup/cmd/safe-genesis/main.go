@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rpc"
 
 	opparams "github.com/ethereum-optimism/optimism/op-core/params"
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
@@ -45,6 +46,7 @@ func main() {
 
 func run() error {
 	l1RPC := flag.String("l1-rpc", "http://127.0.0.1:8545", "L1 RPC used to pick the L1 start block")
+	l1StartTag := flag.String("l1-start", "latest", "L1 start block: latest, finalized on an L1 that can reorg, or a block number")
 	allocsPath := flag.String("allocs", "", "L2 state dumped by SafeRollupGenesis.s.sol")
 	gateway := flag.String("gateway", "", "SafeRollupGateway address")
 	batcher := flag.String("batcher", "", "batcher address")
@@ -61,9 +63,21 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("L1 chain ID: %w", err)
 	}
-	l1Start, err := l1.HeaderByNumber(ctx, nil)
+	var l1StartNumber *big.Int
+	switch *l1StartTag {
+	case "latest":
+	case "finalized":
+		l1StartNumber = big.NewInt(int64(rpc.FinalizedBlockNumber))
+	default:
+		n, ok := new(big.Int).SetString(*l1StartTag, 10)
+		if !ok {
+			return fmt.Errorf("unknown --l1-start %q", *l1StartTag)
+		}
+		l1StartNumber = n
+	}
+	l1Start, err := l1.HeaderByNumber(ctx, l1StartNumber)
 	if err != nil {
-		return fmt.Errorf("L1 head: %w", err)
+		return fmt.Errorf("L1 start block: %w", err)
 	}
 
 	allocs, err := jsonutil.LoadJSON[types.GenesisAlloc](*allocsPath)

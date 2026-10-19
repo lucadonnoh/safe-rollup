@@ -1,35 +1,53 @@
-// Devnet configuration: RPCs, deployed addresses and anvil test keys.
+// Configuration from the env file in $SR_ENV (default: the devnet), plus the deployment init.sh wrote.
 import { readFileSync } from 'node:fs'
-import { type Address, type Hex, defineChain } from 'viem'
+import { type Hex, defineChain, fallback, http } from 'viem'
 import type { Contracts } from './lib.ts'
 
 const root = new URL('../', import.meta.url).pathname
 
-const keys = Object.fromEntries(
-  readFileSync(`${root}devnet/accounts.env`, 'utf8')
+const env = Object.fromEntries(
+  readFileSync(process.env.SR_ENV ?? `${root}devnet/devnet.env`, 'utf8')
     .split('\n')
-    .filter((line) => line.includes('='))
-    .map((line) => line.split('=') as [string, string]),
-) as Record<string, Hex>
+    .filter((line) => /^[A-Z0-9_]+=/.test(line))
+    .map((line) => {
+      const i = line.indexOf('=')
+      return [line.slice(0, i), line.slice(i + 1).replace(/^"(.*)"$/, '$1')]
+    }),
+) as Record<string, string>
+const data = env.DATA ?? `${root}.devnet`
 
-export const contracts: Contracts = JSON.parse(readFileSync(`${root}.devnet/addresses.json`, 'utf8'))
-export { keys }
+const deployment = JSON.parse(readFileSync(`${data}/addresses.json`, 'utf8'))
+export const contracts: Contracts = { ...deployment, deployBlock: BigInt(deployment.deployBlock) }
+export const keys = env as Record<string, Hex>
+export const config = {
+  vetoMarginSeconds: BigInt(env.VETO_MARGIN_SECONDS),
+  pollMs: Number(env.POLL_MS),
+  demoEth: env.DEMO_ETH,
+  demoAttack: env.DEMO_ATTACK === 'true',
+  explorerUrl: env.EXPLORER_URL as string | undefined,
+}
 
 export const rpc = {
-  l1: 'http://127.0.0.1:8545',
+  l1: env.L1_RPC,
+  l1Fallbacks: env.L1_RPC_FALLBACKS?.split(',').filter(Boolean) ?? [],
   l2: 'http://127.0.0.1:9545',
   rollup: 'http://127.0.0.1:7545',
   l2Verifier: 'http://127.0.0.1:9645',
+  rollupVerifier: 'http://127.0.0.1:7645',
 }
 
+/** L1 reads move on to the next RPC when one fails, e.g. on a rate limit or logs it has pruned. */
+export const l1Transport = fallback([rpc.l1, ...rpc.l1Fallbacks].map((url) => http(url)))
+
+export const rollup = JSON.parse(readFileSync(`${data}/rollup.json`, 'utf8'))
 export const l1Chain = defineChain({
-  id: 900,
+  id: rollup.l1_chain_id,
   name: 'L1',
   nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
   rpcUrls: { default: { http: [rpc.l1] } },
 })
 export const l2Chain = defineChain({
-  id: 901,
+  id: rollup.l2_chain_id,
   name: 'Safe rollup',
   nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
   rpcUrls: { default: { http: [rpc.l2] } },
@@ -54,4 +72,4 @@ export function log(who: string, msg: string, extra: Record<string, unknown> = {
   console.log(`${new Date().toISOString().slice(11, 19)} [${who}] ${msg} ${fields}`)
 }
 
-export type { Address }
+export type { Address } from 'viem'

@@ -1,0 +1,9 @@
+# Every Safe rollup service. systemctl --user start|stop safe-rollup.target
+[Unit]
+Description=Safe rollup on Sepolia
+Wants=safe-rollup@da-server.service safe-rollup@sequencer-geth.service safe-rollup@sequencer-node.service
+Wants=safe-rollup@verifier-geth.service safe-rollup@verifier-node.service safe-rollup@op-batcher.service
+Wants=safe-rollup@relayer.service safe-rollup@watcher.service safe-rollup@server.service safe-rollup@story.service
+
+[Install]
+WantedBy=default.target

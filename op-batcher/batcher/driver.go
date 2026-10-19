@@ -702,8 +702,11 @@ func (l *BatchSubmitter) publishToAltDAAndL1(txdata txData, queue *txmgr.Queue[t
 	if !goroutineSpawned {
 		// We couldn't start the goroutine because the errgroup.Group limit
 		// is already reached. Since we can't send the txdata, we have to
-		// return it for later processing. We use nil error to skip error logging.
+		// return it for later processing. io.EOF ends this publishing round
+		// without logging an error, so the loop waits for the next signal
+		// instead of polling the L1 head until a DA slot frees up.
 		l.recordFailedDARequest(txdata.ID(), nil)
+		return io.EOF
 	}
 	return nil
 }

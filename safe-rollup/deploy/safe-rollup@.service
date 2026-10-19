@@ -1,0 +1,17 @@
+# One Safe rollup service (the instance name is a run.sh service), as a systemd user unit.
+# Logs: journalctl --user -u safe-rollup@<service>
+[Unit]
+Description=Safe rollup %i
+After=network-online.target
+PartOf=safe-rollup.target
+
+[Service]
+Environment=SR_ENV=%h/safe-rollup/sepolia.env
+Environment=PATH=%h/.local/bin:%h/.foundry/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/work/optimism-safe-rollup/safe-rollup/run.sh %i
+Restart=always
+RestartSec=10
+TimeoutStopSec=60
+
+[Install]
+WantedBy=safe-rollup.target
