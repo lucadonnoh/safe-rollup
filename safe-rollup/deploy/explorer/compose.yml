@@ -64,7 +64,7 @@ services:
       NEXT_PUBLIC_FOOTER_LINKS: "[{'title':'Safe Rollup','links':[{'text':'About and disclaimer','url':'${STATUS_URL}'},{'text':'Safe trademark policy','url':'https://safe.global/trademark'}]}]"
 
   proxy:
-    image: nginx:1.27
+    image: nginx:1.30
     restart: unless-stopped
     logging: *logging
     depends_on: [backend, frontend]
@@ -77,7 +77,7 @@ services:
   # Docker bridge address, where the backend reaches them as host.docker.internal, without opening
   # them to the LAN.
   rpc-relay:
-    image: nginx:1.27
+    image: nginx:1.30
     restart: unless-stopped
     logging: *logging
     network_mode: host
