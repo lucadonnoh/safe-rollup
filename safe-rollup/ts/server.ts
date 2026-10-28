@@ -1,5 +1,6 @@
 // Public face of a Safe rollup instance, on 127.0.0.1:8090 behind a tunnel: a status page built from
 // chain data only, and a rate-limited JSON-RPC proxy to the sequencer for wallets.
+// With FROZEN=true the chain is stopped: the server only serves the last status it saved, and the RPC is gone.
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http'
 import {
@@ -384,6 +385,9 @@ const server = createServer((req, res) => {
     if (!allow(req, 1)) return send(res, 429, 'text/plain', 'rate limited')
     return send(res, 200, 'application/json', snapshot, { 'cache-control': 'no-store' })
   }
+  if (req.method === 'POST' && (path === '/' || path === '/rpc') && config.frozen) {
+    return send(res, 410, 'application/json', JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32000, message: 'network stopped' } }))
+  }
   if (req.method === 'POST' && (path === '/' || path === '/rpc')) {
     const chunks: Buffer[] = []
     let size = 0
@@ -408,9 +412,10 @@ const server = createServer((req, res) => {
 server.requestTimeout = 30_000
 server.headersTimeout = 10_000
 
-await loadFixed()
+if (config.frozen && snapshot === '{}') throw new Error('No status snapshot to serve', { cause: { file: SNAPSHOT_FILE } })
+if (!config.frozen) await loadFixed()
 server.listen(PORT, '127.0.0.1', () => log('server', `listening on 127.0.0.1:${PORT}`))
-while (true) {
+while (!config.frozen) {
   try {
     await refresh()
   } catch (e) {

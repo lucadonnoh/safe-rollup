@@ -26,6 +26,7 @@ export const config = {
   demoEth: env.DEMO_ETH,
   demoAttack: env.DEMO_ATTACK === 'true',
   explorerUrl: env.EXPLORER_URL as string | undefined,
+  frozen: env.FROZEN === 'true',
 }
 
 export const rpc = {

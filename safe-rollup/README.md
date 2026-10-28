@@ -8,11 +8,11 @@ constrain the operator is gone.
 
 This is a parody. It shows that a Stage 0 rollup gives its
 users nothing the operator's multisig does not already give them. Read Safe as in the Safe
-multisig, not as in safe funds. It runs on Sepolia with test ETH and is not intended for any other
-use. "Safe" means the unmodified Safe v1.4.1 contracts this chain is built on. The project is not
-affiliated with, sponsored or endorsed by the Safe Ecosystem Foundation. SAFE{CORE}® and
-SAFE{WALLET}®, and the Safe logos are trademarks or registered trademarks of Safe Ecosystem
-Foundation.
+multisig, not as in safe funds. It ran on Sepolia with test ETH from October 16 to October 28,
+2026, and is not intended for any other use. "Safe" means the unmodified Safe v1.4.1 contracts
+this chain is built on. The project is not affiliated with, sponsored or endorsed by the Safe
+Ecosystem Foundation. SAFE{CORE}® and SAFE{WALLET}®, and the Safe logos are trademarks or
+registered trademarks of Safe Ecosystem Foundation.
 
 ## Trust model
 
@@ -86,6 +86,12 @@ service in the foreground. `up.sh` is anvil plus those two.
 
 ### On Sepolia
 
+The public instance ran from October 16 to October 28, 2026, with a status page at
+[saferollup.fyi](https://saferollup.fyi) and a Blockscout explorer at
+[explorer.saferollup.fyi](https://explorer.saferollup.fyi). It was then stopped for good, and both
+sites now show its final state: with `FROZEN=true` in the env file, `ts/server.ts` serves the last
+status it saved and answers RPC calls with an error, and the explorer serves what it had indexed.
+
 `deploy/` has an env template for Sepolia (canonical Safe, finalized start block, low fee floors,
 a 10 minute payout delay) and systemd user units: one per `run.sh` service, plus `story`, which
 repeats the demo. Copy the template outside the repo, fill in fresh keys and fund the deployer,
@@ -100,7 +106,9 @@ systemctl --user daemon-reload && systemctl --user enable --now safe-rollup.targ
 `deploy/explorer/` runs Blockscout (Postgres, backend, frontend, nginx) with Docker Compose on
 `127.0.0.1:8091`. It takes blocks from the sequencer and traces from the verifier, which is an
 archive node for this reason. It is pinned to backend 9.0.2 and frontend v2.3.1, the last releases
-under GPL-3.0 with public images: Blockscout moved to a proprietary licence on 2026-04-22.
+under GPL-3.0 with public images: Blockscout moved to a proprietary licence on 2026-04-22. As
+committed it serves a stopped chain (`DISABLE_INDEXER=true` in `backend.env`). For a live one, set
+that to false and start it with `--profile live`, which adds the relay to the two op-geth RPCs.
 
 Never reuse well-known keys there: anvil's test accounts carry EIP-7702 sweeper delegations on
 Sepolia, so any ETH paid out to them is gone at once.

@@ -77,6 +77,8 @@ services:
   # Docker bridge address, where the backend reaches them as host.docker.internal, without opening
   # them to the LAN.
   rpc-relay:
+    # Only while the chain runs: docker compose --profile live up -d
+    profiles: [live]
     image: nginx:1.30
     restart: unless-stopped
     logging: *logging

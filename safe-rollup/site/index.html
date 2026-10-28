@@ -320,7 +320,7 @@
         <a class="btn primary" id="cta-safe" href="#network">Talk to our multisig ›</a>
         <a class="btn ghost" id="cta-explorer" href="#network">Open the explorer</a>
       </div>
-      <p class="fine">This is a parody. It runs on Sepolia with test ETH and is not intended for any other use.</p>
+      <p class="fine">This is a parody. It ran on Sepolia with test ETH until October 28, 2026, and is not intended for any other use.</p>
     </div>
     <div class="summary">
       <a class="sum" href="#zero-proofs"><span class="k">Zero Proofs™</span><span class="v">Fastest and most secure ever</span><span class="t">0s to prove a block, and no cryptography to break.</span></a>
@@ -527,12 +527,12 @@
         <tr><td><span class="mk yes">✓</span>Clawback</td><td class="muted">From any L2 account, without its owner's signature.</td></tr>
         <tr><td><span class="mk yes">✓</span>Court-ordered seizure</td><td class="muted">Two of three signatures. No court required.</td></tr>
         <tr><td><span class="mk yes">✓</span>Allowlists and blocklists</td><td class="muted">The veto.</td></tr>
-        <tr><td><span class="mk yes">✓</span>Regulator access</td><td class="muted">Read access through our RPC, like everyone else.</td></tr>
+        <tr><td><span class="mk yes">✓</span>Regulator access</td><td class="muted">Read access through our explorer, like everyone else.</td></tr>
           </tbody>
         </table>
       </div>
       <div>
-        <h3>Recent forced transfers</h3>
+        <h3>Last forced transfers</h3>
         <ul class="findings" id="forced"><li class="muted">Loading…</li></ul>
         <p class="muted small">Each one is a deposit the Safe made in the account's name, which L2 runs without the account's
         signature. HashKey Chain's admin used the same function to move 142,818 USDT out of a user's account<sup><a href="#ref-17">17</a></sup>.</p>
@@ -543,9 +543,9 @@
         <figcaption>Ours has: every veto is a Safe transaction, and the Safe has been audited six times<sup><a href="#ref-13">13</a></sup>.</figcaption>
       </figure>
       <div>
-        <h3>Recent compliance findings</h3>
+        <h3>Last compliance findings</h3>
         <ul class="findings" id="findings"><li class="muted">Loading…</li></ul>
-        <p class="muted small">Live from Sepolia. Each finding is a Safe transaction with its reason written into it.</p>
+        <p class="muted small">From Sepolia. Each finding is a Safe transaction with its reason written into it.</p>
       </div>
     </div>
   </div>
@@ -729,14 +729,7 @@
   <div class="wrap">
     <div class="eyebrow">Network</div>
     <h2>Network <b>status</b></h2>
-    <p class="lead">Live data from Sepolia and our nodes.</p>
-
-    <h3>Connect a wallet</h3>
-    <table class="plain">
-      <tr><td class="muted">RPC</td><td class="mono" id="rpc"></td></tr>
-      <tr><td class="muted">Chain ID</td><td class="mono" id="chain"></td></tr>
-      <tr><td class="muted">Explorer</td><td id="l2explorer"></td></tr>
-    </table>
+    <p class="lead">The network was stopped on October 28, 2026. This is its final state.</p>
 
     <h3>Chain</h3>
     <table class="plain" id="sync"></table>
@@ -763,11 +756,11 @@
       <details><summary>What are Zero Proofs™?</summary><p>A proof system with no prover and no verifier: a batch is accepted when it is posted. It is also what any rollup's proof system becomes once an admin can replace the verifier without delay.</p></details>
       <details><summary>Why was my withdrawal vetoed?</summary><p>The reason is onchain, in the Safe transaction that vetoed it, as final as the veto itself. The compliance policy reviews every valid withdrawal and vetoes about one in three, for reasons such as unusual activity (the account attempted a withdrawal), source of funds (the assets originated on Ethereum) and proof of reserves (the payout would reduce reserves).</p></details>
       <details><summary>Can I force a withdrawal if the operator censors me?</summary><p>No. On a Stage 0 rollup you can, unless the admin upgrades the bridge first.</p></details>
-      <details><summary>Who can see my transactions?</summary><p>Whoever the operator allows. Today that is anyone using our RPC or our explorer. The batch data behind them stays with the operator.</p></details>
+      <details><summary>Who can see my transactions?</summary><p>Whoever the operator allows. Today that is anyone using our explorer. The batch data behind them stays with the operator.</p></details>
       <details><summary>Is it safe?</summary><p>Safe as in Safe multisig. Your assets sit in a Safe, and its owners can veto any payout. Whether that makes your funds safe depends on who holds the keys, which is also true of every Stage 0 rollup.</p></details>
       <details><summary>Can I get the assurance report?</summary><p>It is available on request.</p></details>
       <details><summary>Why does this exist?</summary><p>To show how much of a rollup stack exists to constrain the operator, and how little remains when the operator is not constrained. The L1 side became a Safe and 199 lines of code. The OP Stack fork went from 633,212 lines to 72,562.</p></details>
-      <details><summary>Is this a real product?</summary><p>No. This is a parody. It runs on Sepolia with test ETH and is not intended for any other use.</p></details>
+      <details><summary>Is this a real product?</summary><p>No. This is a parody. It ran on Sepolia with test ETH until October 28, 2026, and is not intended for any other use.</p></details>
       <details><summary>Is the Safe Ecosystem Foundation involved?</summary><p>No. This project is not affiliated with, sponsored or endorsed by the Safe Ecosystem Foundation. It uses the unmodified Safe contracts because they are good at being a multisig.</p></details>
     </div>
   </div>
@@ -808,8 +801,8 @@
       <span id="footer-links" style="display: contents"></span>
     </div>
     <p><strong>This is a parody.</strong> It shows that a Stage 0 rollup gives its users nothing the operator's multisig
-    does not already give them. Read Safe as in the Safe multisig, not as in safe funds. It runs on Sepolia with test ETH
-    and is not intended for any other use. "Safe" here means the unmodified Safe multisig contracts this chain is built on.
+    does not already give them. Read Safe as in the Safe multisig, not as in safe funds. It ran on Sepolia with test ETH
+    until October 28, 2026, and is not intended for any other use. "Safe" here means the unmodified Safe multisig contracts this chain is built on.
     The project is not affiliated with, sponsored or endorsed by the Safe Ecosystem Foundation.</p>
     <p>SAFE{CORE}® and SAFE{WALLET}®, and the Safe logos are trademarks or registered trademarks of Safe Ecosystem Foundation.</p>
   </div>
@@ -820,10 +813,9 @@ const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])
 const short = (h) => `${h.slice(0, 8)}…${h.slice(-6)}`
 const tiny = (h) => `${h.slice(0, 6)}…${h.slice(-4)}`
-const ago = (t) => {
-  const s = Math.max(0, Math.floor(Date.now() / 1000) - t)
-  return s < 120 ? `${s}s ago` : s < 7200 ? `${Math.floor(s / 60)} min ago` : `${Math.floor(s / 3600)} h ago`
-}
+// The data is frozen at shutdown, so times are dates rather than "ago".
+const when = (t) => `${new Date(t * 1000).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' })} UTC`
+const date = (t) => new Date(t * 1000).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 const span = (sec) => sec % 3600 === 0 ? `${sec / 3600} hour${sec === 3600 ? '' : 's'}` : sec % 60 === 0 ? `${sec / 60} minutes` : `${sec} seconds`
 const eth = (v) => { const n = Number(v); return n >= 100 ? n.toFixed(0) : n >= 1 ? n.toFixed(2) : n.toFixed(4) }
 const n = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`
@@ -883,33 +875,32 @@ function render() {
     const what = f.token ? `${amount({ token: f.token })} from ${l2link(f.from)}` : `A call from ${l2link(f.from)}`
     const to = f.recipient ? (f.recipient.toLowerCase() === s.contracts.safe.toLowerCase() ? ' to the Safe' : ` to ${l2link(f.recipient)}`) : ''
     return `<li>${i > 0 ? `<span class="chip v">${esc(reason.slice(0, i))}</span>${esc(reason.slice(i + 1))}` : esc(reason)}` +
-      `<span class="meta">${what}${to} · ${ago(f.at)} · ${link('tx', f.tx, 'Safe transaction')}</span></li>`
+      `<span class="meta">${what}${to} · ${when(f.at)} · ${link('tx', f.tx, 'Safe transaction')}</span></li>`
   }).join('')
   $('findings').innerHTML = found.length === 0 ? '<li class="muted">No findings yet.</li>' : found.map((p) => {
     const i = p.reason.indexOf(' ')
     return `<li><span class="chip v">${esc(p.reason.slice(0, i))}</span>${esc(p.reason.slice(i + 1))}` +
-      `<span class="meta">${p.doneAt ? ago(p.doneAt) : ''} · withdrawal ${esc(tiny(p.hash))} · ${link('tx', p.doneTx, 'Safe transaction')}</span></li>`
+      `<span class="meta">${p.doneAt ? when(p.doneAt) : ''} · withdrawal ${esc(tiny(p.hash))} · ${link('tx', p.doneTx, 'Safe transaction')}</span></li>`
   }).join('')
   $('c-delay').textContent = span(s.delay)
   for (const id of ['cta-safe', 'nav-safe', 'assure-safe', 'zp-cta', 'mig-cta']) if (s.safeApp) $(id).href = s.safeApp
   if (s.l2Explorer) for (const id of ['cta-explorer']) $(id).href = s.l2Explorer
   if (!$('cso').innerHTML) $('cso').innerHTML = blockie(s.contracts.safe)
 
-  $('sum-forced').textContent = s.totals.forced > 0 ? ` Used ${n(s.totals.forced, 'time')} so far.` : ''
+  $('sum-forced').textContent = s.totals.forced > 0 ? ` Used ${n(s.totals.forced, 'time')}.` : ''
 
   const marks = ['wm1', 'wm2', 'wm3']
   $('cohort').innerHTML = s.owners.map((o, i) =>
     s.explorer ? `<a class="${marks[i % 3]}" href="${s.explorer}/address/${o}">${esc(tiny(o))}</a>` : `<span class="${marks[i % 3]}">${esc(tiny(o))}</span>`).join('')
 
-  $('rpc').textContent = `${location.origin}/rpc`
-  $('chain').textContent = s.l2ChainId
-  $('l2explorer').innerHTML = s.l2Explorer ? `<a href="${s.l2Explorer}">${esc(s.l2Explorer)}</a>` : '<span class="muted">none</span>'
-  const head = (label, b, note) => `<tr><td class="muted">${label}</td><td class="mono">${b.number}</td><td class="muted">${ago(b.timestamp)}${note ? `. ${note}` : ''}</td></tr>`
+  const head = (label, b, note) => `<tr><td class="muted">${label}</td><td class="mono">${b.number}</td><td class="muted">${when(b.timestamp)}${note ? `. ${note}` : ''}</td></tr>`
   $('sync').innerHTML =
+    `<tr><td class="muted">Chain ID</td><td class="mono">${s.l2ChainId}</td><td></td></tr>` +
+    `<tr><td class="muted">Explorer</td><td colspan="2">${s.l2Explorer ? `<a href="${s.l2Explorer}">${esc(s.l2Explorer)}</a>` : '<span class="muted">none</span>'}</td></tr>` +
     head('L2 head', s.sync.unsafe, 'From the sequencer') +
     head('L2 safe', s.sync.safe, 'Derived from Ethereum and the batch data by our verifier node') +
     head('L2 finalized', s.sync.finalized) +
-    `<tr><td class="muted">L1 derived up to</td><td>${link('block', s.sync.l1Derived.number, String(s.sync.l1Derived.number))}</td><td class="muted">${ago(s.sync.l1Derived.timestamp)}</td></tr>`
+    `<tr><td class="muted">L1 derived up to</td><td>${link('block', s.sync.l1Derived.number, String(s.sync.l1Derived.number))}</td><td class="muted">${when(s.sync.l1Derived.timestamp)}</td></tr>`
   const row = (label, addr, note) => `<tr><td class="muted">${label}</td><td>${link('address', addr, addr)}</td><td class="muted">${note ?? ''}</td></tr>`
   $('contracts').innerHTML =
     row('Safe', s.contracts.safe, `${s.threshold} of ${s.owners.length} owners, holds ${eth(s.balances.safe)} ETH${s.safeApp ? `. <a href="${s.safeApp}">Safe app</a>` : ''}`) +
@@ -928,11 +919,11 @@ function render() {
     s.payouts.map((p) => `<tr><td class="mono">${short(p.hash)}</td>` +
       `<td>${p.onL2 !== undefined ? `block ${p.onL2}` : '<span class="vetoed">not found</span>'}</td>` +
       `<td>${link('address', p.to)}</td><td class="mono">${amount(p)}</td>` +
-      `<td>${link('tx', p.queuedTx)} <span class="muted">${ago(p.queuedAt)}</span></td><td>${status(p)}</td></tr>`).join('')
+      `<td>${link('tx', p.queuedTx)} <span class="muted">${when(p.queuedAt)}</span></td><td>${status(p)}</td></tr>`).join('')
   $('deposits').innerHTML = s.deposits.length === 0 ? '<tr><td class="muted">None yet</td></tr>' :
     '<tr><th>L1 tx</th><th>From</th><th>Kind</th><th>ETH</th></tr>' +
     s.deposits.map((d) => `<tr><td>${link('tx', d.tx)}</td><td>${link('address', d.from)}</td><td>${d.kind === 'ETH' ? 'ETH' : d.kind === 'forced' ? 'Forced transfer' : 'Message or token'}</td><td class="mono">${d.mint}</td></tr>`).join('')
-  $('updated').textContent = `Updated ${ago(s.updatedAt)}. ${n(s.totals.deposits, 'deposit')} and ${n(s.totals.payouts, 'payout')} since launch, ${ago(s.since)}.`
+  $('updated').textContent = `Final state, saved ${when(s.updatedAt)}: ${n(s.totals.deposits, 'deposit')} and ${n(s.totals.payouts, 'payout')} between ${date(s.since)} and ${date(s.updatedAt)}.`
 
   $('footer-links').innerHTML = [
     s.safeApp && `<a href="${s.safeApp}">The Safe</a>`,
@@ -952,7 +943,6 @@ async function load() {
   }
 }
 load()
-setInterval(load, 10_000)
 </script>
 </body>
 </html>
