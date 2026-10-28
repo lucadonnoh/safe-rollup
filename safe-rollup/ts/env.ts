@@ -15,6 +15,7 @@ const env = Object.fromEntries(
     }),
 ) as Record<string, string>
 const data = env.DATA ?? `${root}.devnet`
+export const dataDir = data
 
 const deployment = JSON.parse(readFileSync(`${data}/addresses.json`, 'utf8'))
 export const contracts: Contracts = { ...deployment, deployBlock: BigInt(deployment.deployBlock) }

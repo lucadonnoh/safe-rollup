@@ -1,6 +1,6 @@
 // Public face of a Safe rollup instance, on 127.0.0.1:8090 behind a tunnel: a status page built from
 // chain data only, and a rate-limited JSON-RPC proxy to the sequencer for wallets.
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http'
 import {
   type Address,
@@ -16,7 +16,7 @@ import {
   parseAbi,
   sliceHex,
 } from 'viem'
-import { contracts as c, config, keys, l1Chain, l1Transport, l2Chain, log, rollup, rpc, sleep } from './env.ts'
+import { contracts as c, config, dataDir, keys, l1Chain, l1Transport, l2Chain, log, rollup, rpc, sleep } from './env.ts'
 import {
   L1_LAG,
   L2_CROSS_DOMAIN_MESSENGER,
@@ -105,7 +105,9 @@ const blockTimes = new Map<bigint, number>()
 let nextL1 = c.deployBlock
 let nextL2 = 0n
 let fixed: Record<string, unknown> = {}
-let snapshot = '{}'
+// The last status survives restarts: rescanning L1 takes minutes, and the page would be empty meanwhile.
+const SNAPSHOT_FILE = `${dataDir}/status-snapshot.json`
+let snapshot = existsSync(SNAPSHOT_FILE) ? readFileSync(SNAPSHOT_FILE, 'utf8') : '{}'
 
 async function blockTime(n: bigint) {
   if (!blockTimes.has(n)) blockTimes.set(n, Number((await l1.getBlock({ blockNumber: n })).timestamp))
@@ -274,6 +276,8 @@ async function refresh() {
     deposits: [...deposits].reverse(),
     forced: [...forced].reverse(),
   })
+  writeFileSync(`${SNAPSHOT_FILE}.tmp`, snapshot)
+  renameSync(`${SNAPSHOT_FILE}.tmp`, SNAPSHOT_FILE)
 }
 
 async function loadFixed() {
